@@ -1,0 +1,415 @@
+# ==============================================================================
+# WAF Evasion Lab — Phase 2 compose
+# ------------------------------------------------------------------------------
+# Profiles:
+#   (default)        → Traefik + 3 targets + shadowd stack + 9 WAF×target routes
+#                      + 3 baseline (no-WAF) routes
+#   paranoia-high    → + 6 paranoia-4 ModSec/Coraza variants
+#   ml               → + 3 open-appsec stubs (see wafs/openappsec/README.md)
+#
+# Network matrix exposed via Traefik on 127.0.0.1:${TRAEFIK_PORT:-8000}. The
+# engine (Phase 3+) reaches routes by setting the Host header, e.g.
+#   curl -H 'Host: modsec-dvwa.local' http://127.0.0.1:8000/
+# ==============================================================================
+
+networks:
+  waflab:
+    name: waflab
+
+volumes:
+  shadowd-db-data:
+  dvwa-db-data:
+
+# ---------- reusable anchors ----------
+x-modsec-common: &modsec-common
+  image: owasp/modsecurity-crs:4.25.0-nginx-alpine-202604040104
+  restart: unless-stopped
+  networks: [waflab]
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q -U waflab-hc -O- http://127.0.0.1:8080/healthz >/dev/null || exit 1"]
+    interval: 10s
+    timeout: 3s
+    start_period: 30s
+    retries: 15
+
+x-modsec-env: &modsec-env
+  PARANOIA: "${MODSEC_PARANOIA:-1}"
+  ANOMALY_INBOUND: "${MODSEC_ANOMALY_INBOUND:-5}"
+  ANOMALY_OUTBOUND: "${MODSEC_ANOMALY_OUTBOUND:-4}"
+  MODSEC_RULE_ENGINE: "On"
+
+x-modsec-env-ph: &modsec-env-ph
+  PARANOIA: "4"
+  ANOMALY_INBOUND: "5"
+  ANOMALY_OUTBOUND: "4"
+  MODSEC_RULE_ENGINE: "On"
+
+x-coraza-common: &coraza-common
+  build:
+    context: ./wafs/coraza
+    dockerfile: Dockerfile
+  image: waflab/coraza:phase1
+  restart: unless-stopped
+  networks: [waflab]
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q -U waflab-hc -O- http://127.0.0.1/healthz >/dev/null || exit 1"]
+    interval: 10s
+    timeout: 3s
+    start_period: 20s
+    retries: 15
+
+x-coraza-ph-directives: &coraza-ph-directives
+  CORAZA_EXTRA_DIRECTIVES: |
+    SecAction "id:900100,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=4,setvar:tx.detection_paranoia_level=4"
+
+x-shadowd-proxy-common: &shadowd-proxy-common
+  build:
+    context: ./wafs/shadowdaemon/proxy
+    dockerfile: Dockerfile
+  image: waflab/shadowd-proxy:phase1
+  restart: unless-stopped
+  networks: [waflab]
+  healthcheck:
+    test: ["CMD-SHELL", "wget -q -U waflab-hc -O- http://127.0.0.1/healthz >/dev/null || exit 1"]
+    interval: 10s
+    timeout: 3s
+    start_period: 20s
+    retries: 15
+
+x-shadowd-proxy-env: &shadowd-proxy-env
+  SHADOWD_HOST: shadowd
+  SHADOWD_PORT: "9115"
+  SHADOWD_ENFORCE: "false"
+  LISTEN_PORT: "80"
+
+services:
+  # ============================================================================
+  # Routing — single Traefik front door on 127.0.0.1:${TRAEFIK_PORT}
+  # ============================================================================
+  traefik:
+    image: traefik:v3.6.13
+    container_name: waflab-traefik
+    restart: unless-stopped
+    command: ["--configFile=/etc/traefik/traefik.yml"]
+    ports:
+      - "127.0.0.1:${TRAEFIK_PORT:-8000}:80"
+      - "127.0.0.1:${TRAEFIK_DASHBOARD_PORT:-8088}:8080"
+    volumes:
+      - ./routing:/etc/traefik:ro
+    networks: [waflab]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1:8080/ping >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 10s
+      retries: 10
+
+  # ============================================================================
+  # Vulnerable targets
+  # ============================================================================
+  dvwa-db:
+    image: mysql:5.7.44
+    container_name: waflab-dvwa-db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "${DVWA_DB_ROOT_PASSWORD:-dvwa_root_dev_only}"
+      MYSQL_DATABASE: dvwa
+      MYSQL_USER: dvwa
+      MYSQL_PASSWORD: "${DVWA_DB_PASSWORD:-dvwa_dev_only}"
+    volumes:
+      - dvwa-db-data:/var/lib/mysql
+    networks: [waflab]
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p${DVWA_DB_ROOT_PASSWORD:-dvwa_root_dev_only} >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      start_period: 40s
+      retries: 20
+
+  dvwa:
+    image: vulnerables/web-dvwa:latest
+    container_name: waflab-dvwa
+    restart: unless-stopped
+    depends_on:
+      dvwa-db:
+        condition: service_healthy
+    networks: [waflab]
+    # DVWA's image has no wget/curl. Use bash's /dev/tcp to verify port 80 is
+    # listening + a POSIX test via echo-to-socket for a cheap HTTP-liveness.
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/80' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 30s
+      retries: 20
+
+  # One-shot DVWA bootstrapper: creates DB schema + admin user. Idempotent.
+  dvwa-init:
+    image: curlimages/curl:8.8.0
+    container_name: waflab-dvwa-init
+    depends_on:
+      dvwa:
+        condition: service_healthy
+    volumes:
+      - ./targets/dvwa/init:/init:ro
+    networks: [waflab]
+    entrypoint: ["sh", "/init/init-dvwa.sh"]
+    restart: "no"
+
+  webgoat:
+    image: webgoat/webgoat:v2025.3
+    container_name: waflab-webgoat
+    restart: unless-stopped
+    environment:
+      TZ: UTC
+    networks: [waflab]
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O/dev/null --spider http://127.0.0.1:8080/WebGoat/login || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 90s
+      retries: 30
+
+  juiceshop:
+    image: bkimminich/juice-shop:v19.2.1
+    container_name: waflab-juiceshop
+    restart: unless-stopped
+    networks: [waflab]
+    # Distroless base — no shell, no wget/curl. Use the bundled node at its
+    # absolute path (found via docker inspect Entrypoint) + CMD form (not
+    # CMD-SHELL) so docker doesn't try to wrap in /bin/sh.
+    healthcheck:
+      test: ["CMD", "/nodejs/bin/node", "-e", "require('net').createConnection(3000,'127.0.0.1').on('connect',()=>process.exit(0)).on('error',()=>process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      start_period: 45s
+      retries: 20
+
+  # ============================================================================
+  # Shadow Daemon daemon + Postgres (shared across all shadowd-* proxies)
+  # ============================================================================
+  shadowd-db:
+    image: zecure/shadowd_database:12.4
+    container_name: waflab-shadowd-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: "${SHADOWD_DB_NAME:-shadowd}"
+      POSTGRES_USER: "${SHADOWD_DB_USER:-shadowd}"
+      POSTGRES_PASSWORD: "${SHADOWD_DB_PASSWORD:-shadowd_dev_only}"
+    volumes:
+      - shadowd-db-data:/var/lib/postgresql/data
+    networks: [waflab]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${SHADOWD_DB_USER:-shadowd} -d ${SHADOWD_DB_NAME:-shadowd}"]
+      interval: 10s
+      timeout: 5s
+      start_period: 20s
+      retries: 10
+
+  shadowd:
+    image: zecure/shadowd:2.2.0
+    container_name: waflab-shadowd
+    restart: unless-stopped
+    depends_on:
+      shadowd-db:
+        condition: service_healthy
+    environment:
+      DB_ENGINE: pgsql
+      DB_HOST: shadowd-db
+      DB_PORT: "5432"
+      DB_NAME: "${SHADOWD_DB_NAME:-shadowd}"
+      DB_USER: "${SHADOWD_DB_USER:-shadowd}"
+      DB_PASSWORD: "${SHADOWD_DB_PASSWORD:-shadowd_dev_only}"
+    networks: [waflab]
+
+  # ============================================================================
+  # WAF × target matrix — default profile
+  # ============================================================================
+  # --- ModSecurity × 3 targets ------------------------------------------------
+  modsec-dvwa:
+    <<: *modsec-common
+    container_name: waflab-modsec-dvwa
+    environment:
+      <<: *modsec-env
+      BACKEND: "http://dvwa:80"
+      SERVER_NAME: "modsec-dvwa.local"
+    depends_on:
+      dvwa-init: { condition: service_completed_successfully }
+
+  modsec-webgoat:
+    <<: *modsec-common
+    container_name: waflab-modsec-webgoat
+    environment:
+      <<: *modsec-env
+      BACKEND: "http://webgoat:8080"
+      SERVER_NAME: "modsec-webgoat.local"
+    depends_on:
+      webgoat: { condition: service_healthy }
+
+  modsec-juiceshop:
+    <<: *modsec-common
+    container_name: waflab-modsec-juiceshop
+    environment:
+      <<: *modsec-env
+      BACKEND: "http://juiceshop:3000"
+      SERVER_NAME: "modsec-juiceshop.local"
+    depends_on:
+      juiceshop: { condition: service_healthy }
+
+  # --- Coraza × 3 targets -----------------------------------------------------
+  coraza-dvwa:
+    <<: *coraza-common
+    container_name: waflab-coraza-dvwa
+    environment:
+      BACKEND: "http://dvwa:80"
+      LISTEN_ADDR: ":80"
+    depends_on:
+      dvwa-init: { condition: service_completed_successfully }
+
+  coraza-webgoat:
+    <<: *coraza-common
+    container_name: waflab-coraza-webgoat
+    environment:
+      BACKEND: "http://webgoat:8080"
+      LISTEN_ADDR: ":80"
+    depends_on:
+      webgoat: { condition: service_healthy }
+
+  coraza-juiceshop:
+    <<: *coraza-common
+    container_name: waflab-coraza-juiceshop
+    environment:
+      BACKEND: "http://juiceshop:3000"
+      LISTEN_ADDR: ":80"
+    depends_on:
+      juiceshop: { condition: service_healthy }
+
+  # --- Shadow Daemon × 3 targets ----------------------------------------------
+  shadowd-dvwa:
+    <<: *shadowd-proxy-common
+    container_name: waflab-shadowd-dvwa
+    environment:
+      <<: *shadowd-proxy-env
+      BACKEND: "http://dvwa:80"
+    depends_on:
+      dvwa-init: { condition: service_completed_successfully }
+      shadowd:   { condition: service_started }
+
+  shadowd-webgoat:
+    <<: *shadowd-proxy-common
+    container_name: waflab-shadowd-webgoat
+    environment:
+      <<: *shadowd-proxy-env
+      BACKEND: "http://webgoat:8080"
+    depends_on:
+      webgoat: { condition: service_healthy }
+      shadowd: { condition: service_started }
+
+  shadowd-juiceshop:
+    <<: *shadowd-proxy-common
+    container_name: waflab-shadowd-juiceshop
+    environment:
+      <<: *shadowd-proxy-env
+      BACKEND: "http://juiceshop:3000"
+    depends_on:
+      juiceshop: { condition: service_healthy }
+      shadowd:   { condition: service_started }
+
+  # ============================================================================
+  # paranoia-high variants (profile: paranoia-high) — 6 services
+  # ============================================================================
+  modsec-ph-dvwa:
+    <<: *modsec-common
+    container_name: waflab-modsec-ph-dvwa
+    profiles: ["paranoia-high"]
+    environment:
+      <<: *modsec-env-ph
+      BACKEND: "http://dvwa:80"
+      SERVER_NAME: "modsec-ph-dvwa.local"
+    depends_on:
+      dvwa-init: { condition: service_completed_successfully }
+
+  modsec-ph-webgoat:
+    <<: *modsec-common
+    container_name: waflab-modsec-ph-webgoat
+    profiles: ["paranoia-high"]
+    environment:
+      <<: *modsec-env-ph
+      BACKEND: "http://webgoat:8080"
+      SERVER_NAME: "modsec-ph-webgoat.local"
+    depends_on:
+      webgoat: { condition: service_healthy }
+
+  modsec-ph-juiceshop:
+    <<: *modsec-common
+    container_name: waflab-modsec-ph-juiceshop
+    profiles: ["paranoia-high"]
+    environment:
+      <<: *modsec-env-ph
+      BACKEND: "http://juiceshop:3000"
+      SERVER_NAME: "modsec-ph-juiceshop.local"
+    depends_on:
+      juiceshop: { condition: service_healthy }
+
+  coraza-ph-dvwa:
+    <<: *coraza-common
+    container_name: waflab-coraza-ph-dvwa
+    profiles: ["paranoia-high"]
+    environment:
+      <<: *coraza-ph-directives
+      BACKEND: "http://dvwa:80"
+      LISTEN_ADDR: ":80"
+    depends_on:
+      dvwa-init: { condition: service_completed_successfully }
+
+  coraza-ph-webgoat:
+    <<: *coraza-common
+    container_name: waflab-coraza-ph-webgoat
+    profiles: ["paranoia-high"]
+    environment:
+      <<: *coraza-ph-directives
+      BACKEND: "http://webgoat:8080"
+      LISTEN_ADDR: ":80"
+    depends_on:
+      webgoat: { condition: service_healthy }
+
+  coraza-ph-juiceshop:
+    <<: *coraza-common
+    container_name: waflab-coraza-ph-juiceshop
+    profiles: ["paranoia-high"]
+    environment:
+      <<: *coraza-ph-directives
+      BACKEND: "http://juiceshop:3000"
+      LISTEN_ADDR: ":80"
+    depends_on:
+      juiceshop: { condition: service_healthy }
+
+  # ============================================================================
+  # open-appsec stubs (profile: ml) — 3 services
+  # ============================================================================
+  openappsec-dvwa:
+    image: traefik/whoami:v1.10.2
+    container_name: waflab-openappsec-dvwa
+    profiles: ["ml"]
+    command: ["--name", "openappsec-stub-dvwa"]
+    networks: [waflab]
+    labels:
+      waflab.stub: "true"
+
+  openappsec-webgoat:
+    image: traefik/whoami:v1.10.2
+    container_name: waflab-openappsec-webgoat
+    profiles: ["ml"]
+    command: ["--name", "openappsec-stub-webgoat"]
+    networks: [waflab]
+    labels:
+      waflab.stub: "true"
+
+  openappsec-juiceshop:
+    image: traefik/whoami:v1.10.2
+    container_name: waflab-openappsec-juiceshop
+    profiles: ["ml"]
+    command: ["--name", "openappsec-stub-juiceshop"]
+    networks: [waflab]
+    labels:
+      waflab.stub: "true"

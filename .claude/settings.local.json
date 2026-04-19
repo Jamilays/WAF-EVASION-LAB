@@ -1,0 +1,42 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker *)",
+      "Bash(uv *)",
+      "Bash(git *)",
+      "Bash(python *)",
+      "Bash(python3 *)",
+      "Bash(curl *)",
+      "mcp__vulnwatch__health",
+      "mcp__vulnwatch__whoami",
+      "mcp__vulnwatch__dashboard_stats",
+      "mcp__vulnwatch__projects_list",
+      "mcp__vulnwatch__dashboard_recent",
+      "mcp__vulnwatch__jobs_queue",
+      "mcp__vulnwatch__policy_list_rules",
+      "mcp__vulnwatch__settings_llm_get",
+      "mcp__vulnwatch__research_summary",
+      "mcp__vulnwatch__settings_agents_get",
+      "mcp__vulnwatch__scans_cancel",
+      "mcp__vulnwatch__*",
+      "Bash(awk '{print $2}')",
+      "Bash(xargs -r kill -TERM)",
+      "Read(//app/app/**)",
+      "Bash(wait)",
+      "Bash(npx tsc *)",
+      "Bash(echo \"Exit: $?\")",
+      "Bash(echo \"exit $?\")",
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(chmod +x tests/phase1.sh)",
+      "Bash(make config *)",
+      "Bash(echo \"exit=$?\")",
+      "Bash(bash tests/phase1.sh)",
+      "Bash(chmod +x targets/dvwa/init/init-dvwa.sh tests/phase1.sh)",
+      "Bash(chmod +x tests/phase2.sh)",
+      "Bash(awk '/^  coraza-ph-webgoat:/,/^  [a-z]/' /tmp/compose-rendered.yml)",
+      "Bash(echo \"wget exit=$?\")",
+      "Bash(bash tests/phase2.sh)"
+    ]
+  }
+}

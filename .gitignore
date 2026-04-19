@@ -1,0 +1,18 @@
+.env
+*.log
+__pycache__/
+.venv/
+node_modules/
+dist/
+build/
+.DS_Store
+.idea/
+.vscode/
+results/raw/*
+results/processed/*
+results/figures/*
+results/reports/*
+!results/**/.gitkeep
+# Local secrets / overrides
+docker-compose.override.yml
+docker-compose.local.yml
