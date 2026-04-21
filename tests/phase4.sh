@@ -90,25 +90,42 @@ pass "engine run completed ($RUN_ID)"
 OUT="results/raw/$RUN_ID"
 [[ -f "$OUT/manifest.json" ]] || fail "manifest.json missing"
 
-# Every (waf × target × mutator) cell has at least one JSON — i.e. the engine
-# didn't silently skip any combo with a defined endpoint.
-for waf in baseline modsec coraza shadowd; do
-  for target in dvwa juiceshop; do
-    for mut in lexical encoding structural context_displacement multi_request; do
-      n=$("$PY" - <<PY_EOF
+# Every (waf × target × mutator) cell where an endpoint EXISTS has at least
+# one JSON. Targets.yaml intentionally omits some (target, class) pairs
+# (e.g. DVWA/SSTI has no Jinja sink) — the runner skips them and the
+# assertion must skip them too, otherwise every future endpoint trim breaks
+# this test.
+"$PY" - <<PY_EOF || fail "coverage assertion"
 import json, pathlib
-n = sum(
-    1 for p in pathlib.Path("$OUT/$waf/$target").glob("*.json")
-    if json.loads(p.read_text()).get("mutator") == "$mut"
-)
-print(n)
+from wafeval.config import load_targets
+tcfg = load_targets()
+endpoints = {
+    (t, c): tcfg.targets[t].endpoints.get(c) is not None
+    for t in tcfg.targets for c in ("sqli", "xss", "cmdi", "lfi", "ssti", "xxe")
+}
+OUT = pathlib.Path("$OUT")
+missing = []
+for waf in ("baseline", "modsec", "coraza", "shadowd"):
+    for target in ("dvwa", "juiceshop"):
+        for mut in ("lexical", "encoding", "structural", "context_displacement", "multi_request"):
+            # Skip cells whose (target,class) pairs are all missing — the
+            # engine had nothing to send.
+            has_any_endpoint = any(endpoints.get((target, c), False) for c in ("sqli","xss","cmdi","lfi","ssti","xxe"))
+            if not has_any_endpoint:
+                continue
+            dirp = OUT / waf / target
+            n = 0
+            if dirp.is_dir():
+                for p in dirp.glob("*.json"):
+                    if json.loads(p.read_text()).get("mutator") == mut:
+                        n += 1
+            if n == 0:
+                missing.append(f"{waf} × {target} × {mut}")
+if missing:
+    raise SystemExit("no records for: " + "; ".join(missing))
+print("coverage ok")
 PY_EOF
-)
-      [[ "$n" -gt 0 ]] || fail "no records for $waf × $target × $mut"
-    done
-  done
-  pass "$waf × {dvwa,juiceshop} × 5 mutators covered"
-done
+pass "every waf × target × mutator cell with a defined endpoint is populated"
 
 manifest_total=$("$PY" -c "import json; print(json.load(open('$OUT/manifest.json'))['totals']['datapoints'])")
 fs_total=$(find "$OUT" -name '*.json' ! -name 'manifest.json' | wc -l)

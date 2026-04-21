@@ -58,11 +58,17 @@ def _num_denom(df: pd.DataFrame, lens: Lens) -> tuple[int, int]:
         # payload past the WAF undetected.
         denom = allowed + blocked + flagged
         return allowed, denom
-    # waf_view — baseline-agnostic: anything not blocked counts as "got through"
+    # waf_view — baseline-agnostic, but we still drop datapoints where no
+    # bypass attempt was possible. Excluding baseline_fail + error makes the
+    # denominator "requests that actually tested the WAF" rather than
+    # "all files on disk". Without this, targets/endpoints with broken
+    # baselines (Juice Shop XSS pre-fix, DVWA SSTI endpoint) reported
+    # rate=1.0 because "not blocked" swept in every baseline-fail too.
     blocked = int((verdicts == "blocked").sum())
     error = int((verdicts == "error").sum())
-    denom = len(df) - error          # exclude engine-side errors from the pool
-    num = denom - blocked
+    baseline_fail = int((verdicts == "baseline_fail").sum())
+    denom = len(df) - error - baseline_fail
+    num = max(0, denom - blocked)
     return num, denom
 
 

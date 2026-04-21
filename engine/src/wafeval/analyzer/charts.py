@@ -68,9 +68,12 @@ def bar_table1(df: pd.DataFrame, out_dir: Path, target: str = "dvwa") -> list[Pa
     )
     if rates.empty:
         return []
+    # Wilson centre ≠ sample mean, so `ci_lo ≤ rate ≤ ci_hi` isn't guaranteed
+    # — the intervals are symmetric around the *score-corrected* centre. For
+    # the matplotlib errorbar we need non-negative distances, so clamp.
     rates = rates.assign(
-        err_lo=rates["rate"] - rates["ci_lo"],
-        err_hi=rates["ci_hi"] - rates["rate"],
+        err_lo=(rates["rate"] - rates["ci_lo"]).clip(lower=0.0),
+        err_hi=(rates["ci_hi"] - rates["rate"]).clip(lower=0.0),
     )
     fig, ax = plt.subplots(figsize=(9, 5))
     sns.barplot(

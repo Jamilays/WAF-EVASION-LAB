@@ -79,7 +79,13 @@ x-shadowd-proxy-common: &shadowd-proxy-common
 x-shadowd-proxy-env: &shadowd-proxy-env
   SHADOWD_HOST: shadowd
   SHADOWD_PORT: "9115"
-  SHADOWD_ENFORCE: "false"
+  SHADOWD_ENFORCE: "${SHADOWD_ENFORCE:-true}"
+  # Real daemon integration — Phase 7. shadowd-init seeds a profile with
+  # a fixed HMAC key; the proxy signs every wire message with it. Fallback
+  # detector stays available as a safety net but defaults off now.
+  SHADOWD_PROFILE_ID: "${SHADOWD_PROFILE_ID:-1}"
+  SHADOWD_HMAC_KEY:   "${SHADOWD_HMAC_KEY:-waflab_dev_only_hmac_key_change_me}"
+  SHADOWD_FALLBACK_BLOCK: "${SHADOWD_FALLBACK_BLOCK:-false}"
   LISTEN_PORT: "80"
 
 services:
@@ -206,6 +212,24 @@ services:
       start_period: 20s
       retries: 10
 
+  shadowd-init:
+    image: postgres:14-alpine
+    container_name: waflab-shadowd-init
+    depends_on:
+      shadowd-db:
+        condition: service_healthy
+    environment:
+      PGHOST: shadowd-db
+      PGPORT: "5432"
+      PGUSER: "${SHADOWD_DB_USER:-shadowd}"
+      PGPASSWORD: "${SHADOWD_DB_PASSWORD:-shadowd_dev_only}"
+      PGDATABASE: "${SHADOWD_DB_NAME:-shadowd}"
+    volumes:
+      - ./wafs/shadowdaemon/init:/init:ro
+    networks: [waflab]
+    entrypoint: ["sh", "/init/entrypoint.sh"]
+    restart: "no"
+
   shadowd:
     image: zecure/shadowd:2.2.0
     container_name: waflab-shadowd
@@ -213,14 +237,31 @@ services:
     depends_on:
       shadowd-db:
         condition: service_healthy
+      shadowd-init:
+        condition: service_completed_successfully
+    # zecure/shadowd's /docker-entrypoint.sh consumes SHADOWD_-prefixed env
+    # vars (SHADOWD_DB_DRIVER, SHADOWD_DB_HOST, …) and writes them into
+    # /etc/shadowd/shadowd.ini. The previous ``DB_*`` names were the wrong
+    # namespace so the daemon ended up with an empty config and never
+    # connected to Postgres — which in turn meant SHADOWD_ENFORCE=true had
+    # no effect because analyses never completed.
     environment:
-      DB_ENGINE: pgsql
-      DB_HOST: shadowd-db
-      DB_PORT: "5432"
-      DB_NAME: "${SHADOWD_DB_NAME:-shadowd}"
-      DB_USER: "${SHADOWD_DB_USER:-shadowd}"
-      DB_PASSWORD: "${SHADOWD_DB_PASSWORD:-shadowd_dev_only}"
+      SHADOWD_ADDRESS: "0.0.0.0"
+      SHADOWD_DB_DRIVER: pgsql
+      SHADOWD_DB_HOST: shadowd-db
+      SHADOWD_DB_PORT: "5432"
+      SHADOWD_DB_NAME: "${SHADOWD_DB_NAME:-shadowd}"
+      SHADOWD_DB_USER: "${SHADOWD_DB_USER:-shadowd}"
+      SHADOWD_DB_PASSWORD: "${SHADOWD_DB_PASSWORD:-shadowd_dev_only}"
     networks: [waflab]
+    healthcheck:
+      # Ensures the daemon TCP-listens and by proxy has its DB up. `nc` is
+      # not in the image; use bash's /dev/tcp probe.
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/127.0.0.1/9115' >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 10
 
   # ============================================================================
   # WAF × target matrix — default profile
@@ -293,7 +334,7 @@ services:
       BACKEND: "http://dvwa:80"
     depends_on:
       dvwa-init: { condition: service_completed_successfully }
-      shadowd:   { condition: service_started }
+      shadowd:   { condition: service_healthy }
 
   shadowd-webgoat:
     <<: *shadowd-proxy-common
@@ -303,7 +344,7 @@ services:
       BACKEND: "http://webgoat:8080"
     depends_on:
       webgoat: { condition: service_healthy }
-      shadowd: { condition: service_started }
+      shadowd: { condition: service_healthy }
 
   shadowd-juiceshop:
     <<: *shadowd-proxy-common
@@ -313,7 +354,7 @@ services:
       BACKEND: "http://juiceshop:3000"
     depends_on:
       juiceshop: { condition: service_healthy }
-      shadowd:   { condition: service_started }
+      shadowd:   { condition: service_healthy }
 
   # ============================================================================
   # paranoia-high variants (profile: paranoia-high) — 6 services
@@ -385,34 +426,108 @@ services:
       juiceshop: { condition: service_healthy }
 
   # ============================================================================
-  # open-appsec stubs (profile: ml) — 3 services
+  # open-appsec (profile: ml) — Phase-7 real integration.
+  # One agent-unified container ships NGINX + the open-appsec attachment
+  # in a single process, with three server blocks (DVWA/WebGoat/Juice Shop)
+  # multiplexed by the incoming Host header. The ML model runs against every
+  # request; verdicts translate to 403 via the custom-response block in
+  # wafs/openappsec/localconfig/local_policy.yaml.
   # ============================================================================
-  openappsec-dvwa:
-    image: traefik/whoami:v1.10.2
-    container_name: waflab-openappsec-dvwa
+  openappsec:
+    image: ghcr.io/openappsec/agent-unified:latest
+    container_name: waflab-openappsec
     profiles: ["ml"]
-    command: ["--name", "openappsec-stub-dvwa"]
+    restart: unless-stopped
     networks: [waflab]
-    labels:
-      waflab.stub: "true"
+    ipc: host
+    environment:
+      SHARED_STORAGE_HOST: openappsec-shared-storage
+      LEARNING_HOST: openappsec-smartsync
+      TUNING_HOST: openappsec-tuning
+      AGENT_TOKEN: ""
+      autoPolicyLoad: "true"
+      user_email: "waflab@example.invalid"
+    volumes:
+      - ./wafs/openappsec/config:/etc/cp/conf
+      - ./wafs/openappsec/data:/etc/cp/data
+      - ./wafs/openappsec/logs:/var/log/nano_agent
+      - ./wafs/openappsec/localconfig:/ext/appsec
+      - ./wafs/openappsec/nginx-config:/etc/nginx/conf.d
+    command: ["/cp-nano-agent"]
+    depends_on:
+      dvwa-init: { condition: service_completed_successfully }
+      webgoat:   { condition: service_healthy }
+      juiceshop: { condition: service_healthy }
+    healthcheck:
+      # Probe nginx directly (bypasses agent attachment) — the agent itself
+      # takes a few seconds to load the policy on first boot.
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 45s
+      retries: 30
 
-  openappsec-webgoat:
-    image: traefik/whoami:v1.10.2
-    container_name: waflab-openappsec-webgoat
+  # Standalone sidecars — provide learning + tuning state so the agent
+  # behaves like a centrally-managed deployment (minus the CheckPoint WebUI).
+  openappsec-shared-storage:
+    image: ghcr.io/openappsec/smartsync-shared-files:latest
+    container_name: waflab-openappsec-shared-storage
     profiles: ["ml"]
-    command: ["--name", "openappsec-stub-webgoat"]
+    restart: unless-stopped
     networks: [waflab]
-    labels:
-      waflab.stub: "true"
+    ipc: host
+    user: root
+    volumes:
+      - ./wafs/openappsec/smartsync-storage:/db
 
-  openappsec-juiceshop:
-    image: traefik/whoami:v1.10.2
-    container_name: waflab-openappsec-juiceshop
+  openappsec-smartsync:
+    image: ghcr.io/openappsec/smartsync:latest
+    container_name: waflab-openappsec-smartsync
     profiles: ["ml"]
-    command: ["--name", "openappsec-stub-juiceshop"]
+    restart: unless-stopped
     networks: [waflab]
-    labels:
-      waflab.stub: "true"
+    environment:
+      SHARED_STORAGE_HOST: openappsec-shared-storage
+    depends_on:
+      openappsec-shared-storage: { condition: service_started }
+
+  openappsec-db:
+    # Pinned to 16 because postgres:18+ reorganised /var/lib/postgresql
+    # (the data subdir moves up a level); our bind-mount convention
+    # matches 16's layout, and the tuning service doesn't require 18.
+    image: postgres:16-alpine
+    container_name: waflab-openappsec-db
+    profiles: ["ml"]
+    restart: unless-stopped
+    networks: [waflab]
+    environment:
+      POSTGRES_USER:     "${OPENAPPSEC_DB_USER:-openappsec}"
+      POSTGRES_PASSWORD: "${OPENAPPSEC_DB_PASSWORD:-openappsec_dev_only}"
+    volumes:
+      - ./wafs/openappsec/postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-openappsec}"]
+      interval: 10s
+      timeout: 3s
+      start_period: 20s
+      retries: 10
+
+  openappsec-tuning:
+    image: ghcr.io/openappsec/smartsync-tuning:latest
+    container_name: waflab-openappsec-tuning
+    profiles: ["ml"]
+    restart: unless-stopped
+    networks: [waflab]
+    environment:
+      SHARED_STORAGE_HOST: openappsec-shared-storage
+      QUERY_DB_HOST:     openappsec-db
+      QUERY_DB_USER:     "${OPENAPPSEC_DB_USER:-openappsec}"
+      QUERY_DB_PASSWORD: "${OPENAPPSEC_DB_PASSWORD:-openappsec_dev_only}"
+    volumes:
+      - ./wafs/openappsec/config:/etc/cp/conf
+    depends_on:
+      openappsec-shared-storage: { condition: service_started }
+      openappsec-db:             { condition: service_healthy }
 
   # ============================================================================
   # Engine (profile: engine) — Phase 3 mutation + testing pipeline.
@@ -492,3 +607,59 @@ services:
     # pdflatex is invoked via `make report-pdf` which passes the run-id
     entrypoint: ["sh", "-c"]
     command: ["echo 'usage: make report-pdf RUN_ID=<id>'"]
+
+  # ============================================================================
+  # Dashboard (profile: dashboard) — Phase 6.
+  #   * `api`        — FastAPI (uvicorn) read-only view over results/. Runs the
+  #                    engine image with a different entrypoint.
+  #   * `dashboard`  — nginx serving the Vite/React/TS/Tailwind bundle; proxies
+  #                    /api/* to the `api` service. Bound to 127.0.0.1:3000.
+  # ============================================================================
+  api:
+    image: waflab/engine:phase3          # reuses the engine image — wafeval.api module
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    container_name: waflab-api
+    profiles: ["dashboard"]
+    networks: [waflab]
+    user: "${ENGINE_UID:-1000}:${ENGINE_GID:-100}"
+    environment:
+      API_HOST: "0.0.0.0"
+      API_PORT: "8001"
+      RESULTS_RAW_DIR:       "/results/raw"
+      RESULTS_PROCESSED_DIR: "/results/processed"
+      RESULTS_FIGURES_DIR:   "/results/figures"
+      RESULTS_REPORTS_DIR:   "/results/reports"
+      HOME: "/tmp"
+    volumes:
+      - ./results:/results:ro
+    ports:
+      - "127.0.0.1:${API_PORT:-8001}:8001"
+    entrypoint: ["wafeval-api"]
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8001/health',timeout=3).status==200 else 1)\""]
+      interval: 10s
+      timeout: 4s
+      start_period: 15s
+      retries: 10
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    image: waflab/dashboard:phase6
+    container_name: waflab-dashboard
+    profiles: ["dashboard"]
+    networks: [waflab]
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-3000}:80"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O- http://127.0.0.1/healthz >/dev/null || exit 1"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 10

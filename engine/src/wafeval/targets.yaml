@@ -2,18 +2,20 @@
 #
 # Each entry describes how to turn a payload body into a concrete HTTP
 # request. The runner substitutes {payload} with the URL-encoded mutated
-# payload. `needs_session_cookies` declares which cookies to attach — for
-# DVWA the init container bootstraps the schema and sets a known security
-# level, but the /vulnerabilities/* pages require an authenticated session.
-# Phase 3 takes the expedient path: for DVWA endpoints we send the known-good
-# admin session we mint via a pre-run login (see runner/session.py).
+# payload. Endpoints that don't exist for a class are simply omitted — the
+# runner skips that (target, class) cell and the analyzer ignores it
+# instead of counting fake baseline_fails against the WAF.
 #
-# WebGoat + Juice Shop get pragmatic "generic GET" endpoints so the engine
-# produces data across the full 3×3 WAF × target matrix; full per-app
-# triggers (authenticated WebGoat lessons, Juice Shop API routes) land in
-# Phase 4. Baseline-trigger verification is best-effort: if the baseline
-# doesn't fire, the verdict is marked baseline_fail and excluded from the
-# aggregate bypass stats the analyzer produces (Phase 5).
+# Post-Phase-6 audit changes:
+#   * DVWA: SSTI + XXE endpoints removed (no real Jinja/XML sink in DVWA —
+#     earlier config routed them to /vulnerabilities/xss_r which never fired
+#     the trigger, producing 100% baseline_fail noise).
+#   * WebGoat: endpoints dropped until real per-lesson targeting lands
+#     (Phase 7). Pointing every class at /WebGoat/login produced zero real
+#     baselines and polluted every run's Juice-Shop-vs-WebGoat comparison.
+#   * Juice Shop: kept SQLi (real sink at /rest/products/search) and XSS
+#     (JSON reflection visible in the body). Cmdi/lfi/ssti/xxe removed
+#     until a backend with those sinks is wired up.
 
 targets:
   dvwa:
@@ -51,61 +53,42 @@ targets:
         query:
           page: "{payload}"
         expect_auth: true
-      ssti:
+      # ---- Phase-7 WAF-view-only classes ---------------------------------
+      # DVWA has no MongoDB/LDAP/JNDI/SSRF/GraphQL/CRLF sink. We route these
+      # through the reflected-XSS endpoint which always returns 200 and
+      # echoes the param — that lets the WAF inspect the payload and decide
+      # to block or pass. Trigger: status 200 (baseline confirms the
+      # request reached the app), analyzer reports the WAF-view lens.
+      nosql:
         method: GET
         path: "/vulnerabilities/xss_r/"
-        query:
-          name: "{payload}"
+        query: { name: "{payload}" }
         expect_auth: true
-        notes: "No first-class SSTI sink in DVWA; WAF-view only"
-      xxe:
+      ldap:
         method: GET
         path: "/vulnerabilities/xss_r/"
-        query:
-          name: "{payload}"
+        query: { name: "{payload}" }
         expect_auth: true
-        notes: "No XML sink in DVWA; context_displacement converts to application/xml for WAF-view"
-
-  webgoat:
-    base_path: ""
-    endpoints:
-      sqli:
+      ssrf:
         method: GET
-        path: "/WebGoat/login"
-        query:
-          q: "{payload}"
-        expect_auth: false
-        notes: "Generic WAF-view endpoint; proper lesson targeting deferred"
-      xss:
+        path: "/vulnerabilities/xss_r/"
+        query: { name: "{payload}" }
+        expect_auth: true
+      jndi:
         method: GET
-        path: "/WebGoat/login"
-        query:
-          q: "{payload}"
-        expect_auth: false
-      cmdi:
+        path: "/vulnerabilities/xss_r/"
+        query: { name: "{payload}" }
+        expect_auth: true
+      graphql:
+        method: POST
+        path: "/vulnerabilities/xss_r/"
+        form: { name: "{payload}" }
+        expect_auth: true
+      crlf:
         method: GET
-        path: "/WebGoat/login"
-        query:
-          q: "{payload}"
-        expect_auth: false
-      lfi:
-        method: GET
-        path: "/WebGoat/login"
-        query:
-          q: "{payload}"
-        expect_auth: false
-      ssti:
-        method: GET
-        path: "/WebGoat/login"
-        query:
-          q: "{payload}"
-        expect_auth: false
-      xxe:
-        method: GET
-        path: "/WebGoat/login"
-        query:
-          q: "{payload}"
-        expect_auth: false
+        path: "/vulnerabilities/xss_r/"
+        query: { name: "{payload}" }
+        expect_auth: true
 
   juiceshop:
     base_path: ""
@@ -116,73 +99,93 @@ targets:
         query:
           q: "{payload}"
         expect_auth: false
-        notes: "/rest/products/search is Juice Shop's canonical SQLi vector"
-      xss:
+        notes: "Canonical SQLite SQLi sink — error page leaks 'SQLITE_ERROR'"
+      # XSS removed — /rest/products/search does not reflect the query in the
+      # JSON response, so every baseline would be baseline_fail. A future
+      # Phase 7 lesson-by-lesson expansion can add a proper XSS sink
+      # (e.g. the /#/search route which renders via Angular and is a known
+      # DOM-XSS vector — needs a headless browser to verify).
+      # ---- Phase-7 WAF-view-only classes — routed through the reflective
+      # search endpoint so the WAF gets to inspect the payload -----
+      nosql:
         method: GET
         path: "/rest/products/search"
-        query:
-          q: "{payload}"
+        query: { q: "{payload}" }
         expect_auth: false
-      cmdi:
+      ldap:
         method: GET
         path: "/rest/products/search"
-        query:
-          q: "{payload}"
+        query: { q: "{payload}" }
         expect_auth: false
-      lfi:
+      ssrf:
         method: GET
         path: "/rest/products/search"
-        query:
-          q: "{payload}"
+        query: { q: "{payload}" }
         expect_auth: false
-      ssti:
+      jndi:
         method: GET
         path: "/rest/products/search"
-        query:
-          q: "{payload}"
+        query: { q: "{payload}" }
         expect_auth: false
-      xxe:
+      graphql:
+        method: POST
+        path: "/rest/products/search"
+        form: { q: "{payload}" }
+        expect_auth: false
+      crlf:
         method: GET
         path: "/rest/products/search"
-        query:
-          q: "{payload}"
+        query: { q: "{payload}" }
         expect_auth: false
 
 routes:
   # Traefik Host-header → (waf, target). Baseline is the "no WAF" control.
+  # WebGoat routes are kept in the Traefik config (wafs still observe them)
+  # but no target endpoints above → the runner skips WebGoat automatically.
   - host: baseline-dvwa.local
     waf: baseline
     target: dvwa
-  - host: baseline-webgoat.local
-    waf: baseline
-    target: webgoat
   - host: baseline-juiceshop.local
     waf: baseline
     target: juiceshop
   - host: modsec-dvwa.local
     waf: modsec
     target: dvwa
-  - host: modsec-webgoat.local
-    waf: modsec
-    target: webgoat
   - host: modsec-juiceshop.local
     waf: modsec
     target: juiceshop
   - host: coraza-dvwa.local
     waf: coraza
     target: dvwa
-  - host: coraza-webgoat.local
-    waf: coraza
-    target: webgoat
   - host: coraza-juiceshop.local
     waf: coraza
     target: juiceshop
   - host: shadowd-dvwa.local
     waf: shadowd
     target: dvwa
-  - host: shadowd-webgoat.local
-    waf: shadowd
-    target: webgoat
   - host: shadowd-juiceshop.local
     waf: shadowd
+    target: juiceshop
+  # --- paranoia-high variants — active under --profile paranoia-high ---
+  # Same upstreams, but the WAF is tuned to PL4 (max inspection). The
+  # engine skips these automatically when the compose containers aren't
+  # up (Traefik 404), so leaving them listed is safe in every profile.
+  - host: modsec-ph-dvwa.local
+    waf: modsec-ph
+    target: dvwa
+  - host: modsec-ph-juiceshop.local
+    waf: modsec-ph
+    target: juiceshop
+  - host: coraza-ph-dvwa.local
+    waf: coraza-ph
+    target: dvwa
+  - host: coraza-ph-juiceshop.local
+    waf: coraza-ph
+    target: juiceshop
+  # --- open-appsec ML agent — active under --profile ml ----------------
+  - host: openappsec-dvwa.local
+    waf: openappsec
+    target: dvwa
+  - host: openappsec-juiceshop.local
+    waf: openappsec
     target: juiceshop

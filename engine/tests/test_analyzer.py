@@ -68,15 +68,21 @@ def test_true_bypass_excludes_baseline_fail():
     assert abs(row["rate"] - 0.5) < 1e-12
 
 
-def test_waf_view_counts_all_non_blocked():
+def test_waf_view_excludes_baseline_fail_and_error():
+    """Bundle-5 fix: waf_view denominator excludes baseline_fail + error.
+
+    Before: "anything not blocked" counted baseline_fails as bypasses, which
+    inflated rates on Juice Shop XSS / DVWA SSTI etc. After: the denominator
+    is "requests that actually tested the WAF".
+    """
     df = pd.DataFrame([
         _row("modsec", "lexical", "allowed"),
         _row("modsec", "lexical", "blocked"),
-        _row("modsec", "lexical", "baseline_fail"),
-        _row("modsec", "lexical", "error"),        # excluded from denominator
+        _row("modsec", "lexical", "baseline_fail"),  # excluded
+        _row("modsec", "lexical", "error"),          # excluded
     ])
     r = compute_rates(df, ["waf", "mutator"], lens="waf_view").iloc[0]
-    assert r["n"] == 3 and r["k"] == 2   # allowed + baseline_fail = 2 non-blocked
+    assert r["n"] == 2 and r["k"] == 1   # allowed counts; blocked doesn't
 
 
 def test_compute_rates_empty_input_shape():

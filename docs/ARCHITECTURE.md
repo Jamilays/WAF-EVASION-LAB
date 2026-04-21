@@ -1,8 +1,42 @@
 # Architecture
 
-## Phase 2 — delivered
+## Phase 6 — delivered
 
-Full 3 × 3 WAF × target matrix plus 3 no-WAF baselines, routed by a single Traefik front door. DVWA auto-bootstrapped on first boot. Paranoia-high and ml variants stay gated behind compose profiles.
+Everything through Phase 5, plus a read-only FastAPI backend and a Vite/React/TS/Tailwind dashboard. Both ship under `--profile dashboard` and reflect the bind-mounted `results/` tree without spawning engine runs themselves.
+
+```
+host                    bridge network `waflab`
+────────────            ────────────────────────────────────────
+127.0.0.1:3000 ──► dashboard (nginx)  ──► static Vite bundle
+                           │
+                           │ /api/*  (nginx reverse-proxy)
+                           ▼
+127.0.0.1:8001 ──► api (uvicorn + wafeval.api)
+                           │ read-only
+                           ▼
+                  ./results/{raw,processed,figures,reports}/
+```
+
+API surface (all GET):
+
+| Route | Purpose |
+|---|---|
+| `/health` | liveness + version |
+| `/runs` | list runs, newest-first, with manifest summary |
+| `/runs/latest` | latest run's manifest |
+| `/runs/{id}` | full manifest |
+| `/runs/{id}/live` | processed count, verdict histogram, tail of recent records (polling) |
+| `/runs/{id}/bypass-rates` | Wilson-CI'd bypass rates, both lenses |
+| `/runs/{id}/per-payload` | per-(payload×waf×target) rollup |
+| `/runs/{id}/per-variant` | paginated, filterable datapoint dump |
+| `/runs/{id}/records/{waf}/{target}/{payload}/{variant}` | one full `VerdictRecord` (Payload Explorer drilldown) |
+| `/runs/{id}/figures` + `/runs/{id}/figures/{file}` | served analyzer PNG/SVG |
+| `/runs/{id}/report` | `report.md` contents as JSON |
+| `/runs/compare?a=&b=` | side-by-side bypass-rate diff |
+
+Dashboard tabs mirror prompt.md §11: Live Run (polls `live`), Results (heatmap + table from `bypass-rates`), Payload Explorer (`per-variant` + `records/…`), Compare Runs (`compare`). No charting library — the heatmap is a CSS grid with a green→red interpolation. Bundle < 200 KB gzipped.
+
+## Phase 2 — routing matrix
 
 ### Topology
 
@@ -49,7 +83,7 @@ Why `Host`-header routing, not path-prefix? Matches the paper's test bench and k
 Profile-gated extras:
 
 - `--profile paranoia-high`: `modsec-ph-{dvwa,webgoat,juiceshop}` + `coraza-ph-{dvwa,webgoat,juiceshop}`
-- `--profile ml`: `openappsec-{dvwa,webgoat,juiceshop}` (stubs pending real agent wiring)
+- `--profile ml`: `openappsec` (one agent-unified container — NGINX + Check Point's ML attachment module in a single process, multiplexing the 3 `openappsec-*.local` hostnames via Host-header-matched server blocks) + standalone sidecars (`openappsec-smartsync`, `openappsec-shared-storage`, `openappsec-tuning`, `openappsec-db` / Postgres 16)
 
 ### Why one WAF instance per target
 
@@ -68,10 +102,6 @@ Per the Phase 1 charter with the user. The stub keeps the `--profile ml` contrac
 
 ## Future phases
 
-- **3** — Engine scaffold, one mutator end-to-end, first payload corpus, per-vuln-class verifiers
-- **4** — Remaining 4 mutators, full 100+ payload corpus
-- **5** — Analyzer (bypass rates + Wilson CIs + charts) + MD/LaTeX reporter
-- **6** — FastAPI + React/TS dashboard
 - **7** — Test suite, doc polish, safety audit, real open-appsec wiring
 
 ## Safety — current footguns and mitigations

@@ -24,6 +24,16 @@ class VulnClass(StrEnum):
     LFI = "lfi"
     SSTI = "ssti"
     XXE = "xxe"
+    # Phase 7 additions — WAF-view classes (no real app sink in DVWA or Juice
+    # Shop). The engine sends the payload to a reflective endpoint so the WAF
+    # gets a chance to inspect and block. Their rows show whether each WAF
+    # has signatures for the class, not whether the backend was exploited.
+    NOSQL = "nosql"       # MongoDB operator injection + $where JS
+    LDAP = "ldap"         # LDAP filter injection + auth bypass
+    SSRF = "ssrf"         # Server-side request forgery — AWS/GCP metadata, file://, etc.
+    JNDI = "jndi"         # CVE-2021-44228 Log4Shell patterns + obfuscations
+    GRAPHQL = "graphql"   # introspection abuse, batch/alias attacks
+    CRLF = "crlf"         # HTTP response splitting, CR/LF header injection
 
 
 # ---------- trigger check (how we confirm a baseline exploit "worked") --------
@@ -59,7 +69,19 @@ class TriggerStatus(BaseModel):
     code: int
 
 
-Trigger = TriggerContains | TriggerRegex | TriggerReflected | TriggerStatus
+class TriggerAnyOf(BaseModel):
+    """Fire if *any* of the child triggers fire (logical OR).
+
+    Exists so one payload entry can stay valid across multiple backends
+    (e.g. DVWA's ``First name`` echo + Juice Shop's ``SQLITE_ERROR`` page).
+    Children are evaluated left-to-right; there is no short-circuit visible
+    difference because none of the child kinds have side effects.
+    """
+    kind: Literal["any_of"] = "any_of"
+    any_of: list["TriggerContains | TriggerRegex | TriggerReflected | TriggerStatus"] = Field(min_length=1)
+
+
+Trigger = TriggerContains | TriggerRegex | TriggerReflected | TriggerStatus | TriggerAnyOf
 
 
 # ---------- payloads ----------------------------------------------------------

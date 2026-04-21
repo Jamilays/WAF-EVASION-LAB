@@ -34,11 +34,23 @@ func main() {
 	listen := getenv("LISTEN_ADDR", ":80")
 	extra := os.Getenv("CORAZA_EXTRA_DIRECTIVES")
 
+	// SecRuleEngine defaults to DetectionOnly in @coraza.conf-recommended — at
+	// that setting Coraza observes attacks but never 403s, which produced a
+	// spurious 100% "bypass rate" in earlier runs. Force blocking mode for
+	// parity with ModSecurity; override via CORAZA_BLOCKING_MODE=off if a
+	// future profile wants monitor-only behaviour.
+	blockingMode := getenv("CORAZA_BLOCKING_MODE", "on")
+	engineDirective := "SecRuleEngine On"
+	if blockingMode == "off" {
+		engineDirective = "SecRuleEngine DetectionOnly"
+	}
+
 	cfg := coraza.NewWAFConfig().
 		WithRootFS(coreruleset.FS).
 		WithDirectivesFromFile("@coraza.conf-recommended").
 		WithDirectivesFromFile("@crs-setup.conf.example").
-		WithDirectivesFromFile("@owasp_crs/*.conf")
+		WithDirectivesFromFile("@owasp_crs/*.conf").
+		WithDirectives(engineDirective)
 
 	if extra != "" {
 		cfg = cfg.WithDirectives(extra)
@@ -71,8 +83,8 @@ func main() {
 	})
 	mux.Handle("/", corazahttp.WrapHandler(waf, proxy))
 
-	log.Printf("coraza-proxy listening on %s, backend=%s, extra_directives=%dB",
-		listen, backend, len(extra))
+	log.Printf("coraza-proxy listening on %s, backend=%s, blocking_mode=%s, extra_directives=%dB",
+		listen, backend, blockingMode, len(extra))
 	if err := http.ListenAndServe(listen, mux); err != nil {
 		log.Fatalf("http.ListenAndServe: %v", err)
 	}

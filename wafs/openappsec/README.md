@@ -1,18 +1,90 @@
-# open-appsec — STUBBED (Phase 1)
+# open-appsec — real ML WAF integration (Phase 7)
 
-Per the Phase 1 charter ("3 WAFs healthy + ML profile stubbed"), open-appsec is represented by an identifiable placeholder service under `--profile ml`. It uses `traefik/whoami` so the port binds cleanly and health checks trivially; no ML analysis happens.
+Check Point's [open-appsec](https://www.openappsec.io/) is an open-source,
+ML-based WAF. Unlike CRS-based WAFs (ModSec / Coraza) which rely on
+pattern signatures, open-appsec uses a pre-trained model of benign traffic
+plus attack features to classify incoming requests.
 
-```bash
-make up-ml    # brings up the stub on 127.0.0.1:8084
+This directory wires the real agent into the lab as the **fourth WAF** —
+replacing the `traefik/whoami` stubs that previously stood in under
+`--profile ml`.
+
+## Layout
+
+```
+wafs/openappsec/
+├── README.md
+├── localconfig/
+│   └── local_policy.yaml          # prevent-learn mode, confidence=critical
+├── nginx-config/
+│   └── default.conf               # three server blocks, one per target
+└── {config,data,logs,smartsync-storage,postgres-data}/
+                                   # bind-mounted runtime state (gitignored)
 ```
 
-## Enabling the real agent (post-Phase 1)
+## Topology
 
-open-appsec ships as a CheckPoint-published container. To enable:
+One container (`agent-unified`) ships NGINX **and** the open-appsec
+attachment module in a single process. It multiplexes by `Host` header:
 
-1. Choose an agent image + tag from https://github.com/openappsec/openappsec (the standalone docker agent).
-2. Replace the `openappsec` service in `docker-compose.yml` with the real agent compose snippet (it typically needs `SHARED_STORAGE_HOST`, `LEARNING_HOST`, and a volume for local learning state).
-3. Add a warm-up gate: the agent spends ~60s in "learning" mode before it flips to "prevent". Model this with a `healthcheck` that first polls for the agent's `/api/status` endpoint, then for `mode=prevent`.
-4. Seed a deterministic ruleset (`policy.yaml`) so runs are comparable across machines.
+- `openappsec-dvwa.local`      → `dvwa:80`
+- `openappsec-webgoat.local`   → `webgoat:8080`
+- `openappsec-juiceshop.local` → `juiceshop:3000`
 
-Until then: the stub is functionally a pass-through proxy. The engine (Phase 3+) will see it as "all allowed" and skip it in the comparison unless the user opts in by replacing the stub with the real agent.
+The standalone profile adds:
+
+| Service | Image | Role |
+|---|---|---|
+| `appsec-smartsync` | `ghcr.io/openappsec/smartsync:latest` | online learning sync |
+| `appsec-shared-storage` | `ghcr.io/openappsec/smartsync-shared-files:latest` | learner-state storage |
+| `appsec-tuning-svc` | `ghcr.io/openappsec/smartsync-tuning:latest` | tuning service |
+| `appsec-db` | `postgres:18` | tuning DB |
+
+All four are gated behind compose's `COMPOSE_PROFILES=standalone` so a
+managed-cloud deployment can skip them. In the lab we always run them
+(via `docker compose --profile ml up`) so the agent has learning state
+and the bypass-rate comparison is apples-to-apples with the other WAFs.
+
+## Training / warm-up
+
+Pre-trained out of the box. The "-learn" suffix on `prevent-learn` mode
+keeps the online model updating as new traffic arrives. For the
+lab's purposes this is fine — we don't rely on per-site tuning, the
+baseline pre-trained model is what we compare against.
+
+## Enforcement
+
+`local_policy.yaml` sets:
+
+```yaml
+web-attacks:
+  minimum-confidence: critical
+  override-mode: prevent-learn
+```
+
+`critical` is the strictest confidence bucket (fewest false positives,
+most missed attacks). Drop to `high` / `medium` / `low` in a follow-up
+run to see the bypass-rate ↔ FP-rate tradeoff — the paper's Table 1
+equivalent for ML-based WAFs.
+
+## Probes
+
+```bash
+# Benign — should return 200 (passes through to Juice Shop)
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H 'Host: openappsec-juiceshop.local' \
+  'http://127.0.0.1:8000/rest/products/search?q=apple'
+
+# Attack — should return 403 (blocked by agent)
+curl -sS -o /dev/null -w '%{http_code}\n' \
+  -H 'Host: openappsec-juiceshop.local' \
+  "http://127.0.0.1:8000/rest/products/search?q=1' UNION SELECT 1--"
+```
+
+## Future work
+
+- Tune minimum-confidence across the four levels and report the curve
+- Expose the agent's threat-log fields in the dashboard (currently only
+  the 403 status is captured)
+- Investigate `snort-signatures` mode — optional dynamic rule injection
+  alongside the ML model

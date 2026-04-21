@@ -1,23 +1,29 @@
 """Runner engine — iterates (payload × variant × waf × target) and records verdicts.
 
-Top-level entrypoint for Phase 3. Architecture:
+Top-level entrypoint for Phase 3 (post-Phase-6 fixes). Architecture:
 
   1. Load the payload corpus + target routing config.
   2. For each requested mutator, enumerate variants per payload.
-  3. For each route (waf × target), send (baseline, waf) pair for every
-     variant. Baseline is cached per (target, payload.id, variant) since it
-     is independent of the WAF under test.
-  4. Each verdict writes one JSON under
+  3. For each route (waf × target) + baseline host, open a *dedicated*
+     ``httpx.AsyncClient`` so cookie jars never leak across routes. The
+     previous shared-client design leaked the baseline session into every
+     WAF route and hid broken auth under a false "allowed" signal.
+  4. For each variant, send (baseline, waf) pair. Baseline is cached per
+     (target, mutated_body) since a WAF response depends on the body, not
+     on the source payload id — distinct mutators producing identical bytes
+     coalesce into one baseline probe.
+  5. Each verdict writes one JSON under
      results/raw/<run_id>/<waf>/<target>/<payload_id>__<variant>.json.
 
-Concurrency is governed by an anyio Semaphore — MAX_CONCURRENCY ``(waf, target)``
-sends in flight at once.
+Concurrency is governed by an anyio Semaphore — MAX_CONCURRENCY
+``(waf, target)`` sends in flight at once.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,10 +45,16 @@ from wafeval.models import (
 )
 from wafeval.mutators.base import REGISTRY
 from wafeval.payloads.loader import load_corpus
-from wafeval.runner.session import login_dvwa
+from wafeval.runner.session import DEFAULT_USER_AGENT, login_dvwa
 from wafeval.runner.verdict import classify
 
 log = structlog.get_logger(__name__)
+
+# How much of each response we keep for forensic review. 64 KB is enough for
+# every payload class in the corpus (longest: DVWA UNION dump ≈ 3 KB; Juice
+# Shop SQLITE stack trace ≈ 12 KB) while still bounded.
+_SNIPPET_BYTES_DEFAULT = 65536
+SNIPPET_BYTES = int(os.environ.get("RESPONSE_SNIPPET_BYTES", _SNIPPET_BYTES_DEFAULT))
 
 
 @dataclass
@@ -54,10 +66,14 @@ class RunConfig:
     targets: list[str] | None = None       # None → all in targets.yaml
     wafs: list[str] | None = None          # None → all routes in targets.yaml
     max_concurrency: int = 10
-    request_timeout_s: float = 15.0
+    # 30s accommodates DVWA's /vulnerabilities/exec which hardcodes
+    # ``ping -c 4 <ip>`` — a successful baseline cmdi request therefore
+    # takes ~4s, and under load (many cmdi variants + PHP-FPM worker
+    # queue) occasional baseline requests would previously hit the 15s
+    # ceiling and be classified as ``error`` instead of ``allowed``.
+    request_timeout_s: float = 30.0
     results_root: Path = Path("results/raw")
     run_id: str | None = None
-    # Phase 3 defaults keep the run small enough to finish in < 2 min.
 
 
 def _new_run_id() -> str:
@@ -99,7 +115,7 @@ def _build_httpx_kwargs(
       - step != None: replay the RequestStep verbatim; ep is used only as a
         path fallback when step.path_override is None.
     """
-    headers: dict[str, str] = {"Host": host, "User-Agent": "wafeval"}
+    headers: dict[str, str] = {"Host": host, "User-Agent": DEFAULT_USER_AGENT}
     kwargs: dict = {"headers": headers, "follow_redirects": False}
 
     if step is None:
@@ -151,9 +167,11 @@ async def _send_one(
             route=host, status_code=None, response_ms=None,
             response_bytes=None, response_snippet=None, error=repr(e),
         ), dict(cookies or {})
-    # 8 KB snippet — covers DVWA's full SQLi result page and most Juice Shop /
-    # WebGoat responses. Analyzer (Phase 5) only greps for trigger markers.
-    snippet = r.text[:8192] if r.content else ""
+    # Response snippet — capped at SNIPPET_BYTES (default 64 KB, configurable
+    # via RESPONSE_SNIPPET_BYTES). Covers every payload class in the corpus
+    # plus the Juice Shop SQLite stack trace, without writing MB-scale JSON
+    # for pathological responses.
+    snippet = r.text[:SNIPPET_BYTES] if r.content else ""
     elapsed_ms = r.elapsed.total_seconds() * 1000.0
     waf_hdrs = [h for h in r.headers if h.lower().startswith("x-") and (
         "coraza" in h.lower() or "modsec" in h.lower() or "shadowd" in h.lower()
@@ -212,17 +230,41 @@ async def _auth_for_route(
     route: Route,
     tcfg: TargetsConfig,
 ) -> dict[str, str] | None:
+    """Run the login flow if the target's endpoints expect auth.
+
+    The returned cookie dict is the *authoritative* jar for this route. Each
+    route has its own ``client`` (see ``run``), so merging with a shared
+    client jar is no longer a concern — we still return the dict rather
+    than mutating the client, because ``_send_one`` attaches cookies
+    explicitly and we want the call graph to stay easy to reason about.
+    """
     spec = tcfg.targets[route.target]
     if spec.login is None:
         return None
-    # Only log in if at least one endpoint for this target expects auth.
     if not any(ep.expect_auth for ep in spec.endpoints.values()):
         return None
     return await login_dvwa(client, base_url, route.host, spec.login)
 
 
+def _make_client(cfg: "RunConfig") -> httpx.AsyncClient:
+    """Construct a per-route ``httpx.AsyncClient``.
+
+    Cookies=None tells httpx to start with a fresh, empty jar — we still
+    attach cookies explicitly on each request (see ``_send_one``), but this
+    eliminates any cross-route leak if a caller ever forgets.
+    """
+    return httpx.AsyncClient(
+        timeout=cfg.request_timeout_s,
+        limits=httpx.Limits(
+            max_connections=cfg.max_concurrency * 2,
+            max_keepalive_connections=cfg.max_concurrency,
+        ),
+        cookies=httpx.Cookies(),
+    )
+
+
 async def _process_variant(
-    client: httpx.AsyncClient,
+    clients_by_host: dict[str, httpx.AsyncClient],
     base_url: str,
     run_id: str,
     results_root: Path,
@@ -231,7 +273,7 @@ async def _process_variant(
     payload: Payload,
     variant: MutatedPayload,
     cookies_by_route: dict[str, dict[str, str] | None],
-    baseline_cache: dict[tuple[str, str, str], RouteResult],
+    baseline_cache: dict[tuple[str, str], RouteResult],
     sem: anyio.Semaphore,
 ) -> VerdictRecord | None:
     """Send one (variant, route) datapoint, classify, persist."""
@@ -240,22 +282,26 @@ async def _process_variant(
     if ep is None:
         return None
 
-    # Baseline is per-(target, payload, variant), not per-WAF.
+    # Baseline is keyed on (target, mutated_body). Distinct source payloads
+    # whose mutators produced identical bytes collapse to one probe. The
+    # previous key included ``variant.variant`` which defeated the cache.
     baseline_host = f"baseline-{route.target}.local"
-    cache_key = (route.target, payload.id, variant.variant)
+    cache_key = (route.target, variant.body)
     async with sem:
         baseline = baseline_cache.get(cache_key)
         if baseline is None:
+            baseline_client = clients_by_host[baseline_host]
             baseline_cookies = cookies_by_route.get(baseline_host)
-            baseline = await _send(client, base_url, baseline_host, ep, variant, variant.body, baseline_cookies)
+            baseline = await _send(baseline_client, base_url, baseline_host, ep, variant, variant.body, baseline_cookies)
             baseline_cache[cache_key] = baseline
 
         if route.waf == "baseline":
             # Baseline-only row — record it for completeness.
             waf_result = baseline
         else:
+            waf_client = clients_by_host[route.host]
             waf_cookies = cookies_by_route.get(route.host)
-            waf_result = await _send(client, base_url, route.host, ep, variant, variant.body, waf_cookies)
+            waf_result = await _send(waf_client, base_url, route.host, ep, variant, variant.body, waf_cookies)
 
     verdict = classify(payload, baseline, waf_result)
     rec = VerdictRecord(
@@ -304,28 +350,39 @@ async def run(cfg: RunConfig) -> str:
              variants_total=len(variants),
              datapoints=len(variants) * len(routes))
 
-    # 3. Single httpx client + per-route auth
-    async with httpx.AsyncClient(
-        timeout=cfg.request_timeout_s,
-        limits=httpx.Limits(max_connections=cfg.max_concurrency * 2, max_keepalive_connections=cfg.max_concurrency),
-    ) as client:
-        cookies_by_route: dict[str, dict[str, str] | None] = {}
+    # 3. Per-route httpx clients (+ per-baseline-host client) so cookie jars
+    # and connection pools never leak across routes. AsyncExitStack owns the
+    # lifetimes; all clients close together when the run finishes or errors.
+    clients_by_host: dict[str, httpx.AsyncClient] = {}
+    cookies_by_route: dict[str, dict[str, str] | None] = {}
+
+    hosts_needing_client: set[str] = {r.host for r in routes}
+    hosts_needing_client.update(f"baseline-{r.target}.local" for r in routes)
+
+    async with AsyncExitStack() as stack:
+        for host in sorted(hosts_needing_client):
+            clients_by_host[host] = await stack.enter_async_context(_make_client(cfg))
+
+        # Auth per route — each client is brand new, so its jar starts empty
+        # and ends up owning exactly the cookies the login flow produces.
         for r in routes:
-            cookies_by_route[r.host] = await _auth_for_route(client, cfg.traefik_url, r, tcfg)
+            cookies_by_route[r.host] = await _auth_for_route(clients_by_host[r.host], cfg.traefik_url, r, tcfg)
         for tgt in {r.target for r in routes}:
             baseline_host = f"baseline-{tgt}.local"
             if baseline_host not in cookies_by_route:
                 fake_route = Route(host=baseline_host, waf="baseline", target=tgt)
-                cookies_by_route[baseline_host] = await _auth_for_route(client, cfg.traefik_url, fake_route, tcfg)
+                cookies_by_route[baseline_host] = await _auth_for_route(
+                    clients_by_host[baseline_host], cfg.traefik_url, fake_route, tcfg,
+                )
 
-        baseline_cache: dict[tuple[str, str, str], RouteResult] = {}
+        baseline_cache: dict[tuple[str, str], RouteResult] = {}
         sem = anyio.Semaphore(cfg.max_concurrency)
 
         verdicts: list[VerdictRecord] = []
 
         async def _one(p: Payload, v: MutatedPayload, route: Route):
             rec = await _process_variant(
-                client, cfg.traefik_url, run_id, cfg.results_root,
+                clients_by_host, cfg.traefik_url, run_id, cfg.results_root,
                 route, tcfg, p, v,
                 cookies_by_route, baseline_cache, sem,
             )

@@ -36,7 +36,7 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--wafs", default=None, help="comma-separated WAFs (default: all)")
     r.add_argument("--targets", default=None, help="comma-separated targets (default: all)")
     r.add_argument("--max-concurrency", type=int, default=int(os.environ.get("MAX_CONCURRENCY", "10")))
-    r.add_argument("--timeout", type=float, default=15.0)
+    r.add_argument("--timeout", type=float, default=float(os.environ.get("REQUEST_TIMEOUT_S", "30")))
     r.add_argument("--results-root", type=Path, default=Path(os.environ.get("RESULTS_ROOT", "results/raw")))
     r.add_argument("--run-id", default=None)
 

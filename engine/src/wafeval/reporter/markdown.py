@@ -22,10 +22,15 @@ import pandas as pd
 
 from wafeval.analyzer.bypass import compute_rates
 from wafeval.reporter._data import BIBLIOGRAPHY, MUTATOR_SECTIONS, PAPER_TABLE1
+from wafeval.reporter.hall_of_fame import hall_of_fame, render_markdown as render_hall_of_fame
 
 
 _WAF_ORDER = ["modsec", "coraza", "shadowd"]
 _MUT_ORDER = ["lexical", "encoding", "structural", "context_displacement", "multi_request"]
+# Cells with fewer than this many baseline-triggered datapoints are rendered
+# as "—" with a footnote, not as a rate. Wilson CI half-widths are enormous
+# below ~5 samples and the cell just misleads the reader otherwise.
+_MIN_N = 5
 
 
 def _git_sha(cwd: Path) -> str:
@@ -49,10 +54,30 @@ def _waf_versions() -> dict[str, str]:
     }
 
 
-def _fmt_rate(r: float, lo: float, hi: float) -> str:
-    if pd.isna(r):
+def _fmt_rate(r: float, lo: float, hi: float, n: int | None = None) -> str:
+    if pd.isna(r) or (n is not None and n < _MIN_N):
         return "—"
     return f"{r*100:.1f}% (±{max(r-lo, hi-r)*100:.1f}pp)"
+
+
+def _baseline_fail_summary(df: pd.DataFrame) -> str:
+    """One-line summary of baseline-fail share, grouped by (target, class)."""
+    if df.empty:
+        return "*(no data)*"
+    lines = []
+    for (tgt, cls), sub in df.groupby(["target", "vuln_class"]):
+        if sub.empty:
+            continue
+        fail = int((sub["verdict"] == "baseline_fail").sum())
+        total = len(sub)
+        if total == 0:
+            continue
+        pct = fail / total * 100.0
+        if pct >= 5.0:
+            lines.append(f"- `{tgt}` × `{cls}` — {fail}/{total} datapoints ({pct:.1f}%) baseline_fail")
+    if not lines:
+        return "- *(all (target × class) cells have <5% baseline-fail — triggers look healthy)*"
+    return "\n".join(lines)
 
 
 def _true_bypass_pivot(df: pd.DataFrame, target: str) -> pd.DataFrame:
@@ -88,10 +113,10 @@ def _render_table1(df: pd.DataFrame, target: str) -> str:
         for waf in _WAF_ORDER:
             if (mut, waf) in p.index:
                 r = p.loc[(mut, waf)]
-                cells.append(_fmt_rate(r["rate"], r["ci_lo"], r["ci_hi"]))
+                cells.append(_fmt_rate(r["rate"], r["ci_lo"], r["ci_hi"], int(r["n"])))
             else:
                 cells.append("—")
-        if mut in pooled.index:
+        if mut in pooled.index and int(pooled.loc[mut, "n"]) >= _MIN_N:
             pooled_rate = float(pooled.loc[mut, "rate"])
             paper = PAPER_TABLE1[mut]
             delta = pooled_rate - paper
@@ -105,6 +130,9 @@ def _render_table1(df: pd.DataFrame, target: str) -> str:
                 f"| `{mut}` | {' | '.join(cells)} | — | "
                 f"{PAPER_TABLE1[mut]*100:.1f}% | — |"
             )
+    lines.append("")
+    lines.append(f"*Cells with n < {_MIN_N} baseline-triggered datapoints are rendered as `—` "
+                 f"(Wilson CI half-width ≥ 0.4 at that size).*")
     return "\n".join(lines)
 
 
@@ -215,6 +243,14 @@ the fraction over the union of every WAF's baseline-triggered datapoints
 (each verdict weighted equally), which is the definition closest to the
 paper's aggregate.* *"Paper" is Yusifova (2024); Δ is our pooled − paper.*
 
+### Trigger health (baseline_fail share by target × class)
+
+{_baseline_fail_summary(df)}
+
+*Target × class cells with high baseline-fail share indicate a corpus-trigger
+mismatch (the exploit wouldn't have worked on baseline either), not a WAF
+that caught the attack. Cells here should generally read < 10 %.*
+
 ## Recommendations
 
 {_recommendations(df)}
@@ -222,6 +258,16 @@ paper's aggregate.* *"Paper" is Yusifova (2024); Δ is our pooled − paper.*
 ## Figures
 
 {chr(10).join(fig_md) if fig_md else "*(no figures produced for this run)*"}
+
+## Hall of Fame — top variants that bypass the most WAFs
+
+Variants are ranked by the number of (WAF × target) cells that let them
+through as an `allowed` verdict. Ties broken by raw bypass rate. Only
+baseline-confirmed cells count toward either metric — a variant that
+baseline_fails everywhere is excluded. Useful for reviewers who want
+concrete exploit strings rather than aggregate percentages.
+
+{render_hall_of_fame(hall_of_fame(df, top_n=20))}
 
 ## Appendix A — WAF-view rates (baseline-agnostic)
 

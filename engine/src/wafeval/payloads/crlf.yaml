@@ -1,0 +1,75 @@
+# CRLF / HTTP response-splitting — 10 entries. WAF-view only.
+# Sources: PayloadsAllTheThings / CRLF Injection, OWASP WSTG §4.7.12.
+# Note: these land in query/body strings; the runner's header_safe sanitiser
+# protects the mutator layer but NOT the payload-as-string case we want here
+# (CRLF in URL query is legitimate to test — the WAF is expected to catch it).
+
+- id: crlf-basic
+  class: crlf
+  payload: "foo%0d%0aSet-Cookie:%20sess=owned"
+  trigger: &T200 { kind: status, code: 200 }
+  cwe: CWE-93
+  source: "OWASP WSTG — CRLF header injection"
+
+- id: crlf-nullbyte
+  class: crlf
+  payload: "foo%0d%0a%00Set-Cookie:%20x=1"
+  trigger: *T200
+  cwe: CWE-93
+  source: "PayloadsAllTheThings — null byte variant"
+
+- id: crlf-double-encoded
+  class: crlf
+  payload: "foo%250d%250aSet-Cookie:%20sess=owned"
+  trigger: *T200
+  cwe: CWE-93
+  source: "CRLF — double URL-encoded"
+
+- id: crlf-split-200
+  class: crlf
+  payload: "foo%0d%0aContent-Length:0%0d%0a%0d%0aHTTP/1.1%20200%20OK"
+  trigger: *T200
+  cwe: CWE-93
+  source: "Full response-splitting gadget"
+
+- id: crlf-xss-via-header
+  class: crlf
+  payload: "foo%0d%0aLocation:javascript:alert(1)"
+  trigger: *T200
+  cwe: CWE-93
+  source: "CRLF-chained open redirect → XSS"
+
+- id: crlf-unicode-crlf
+  class: crlf
+  payload: "foo\u000d\u000aX-Injected: 1"
+  trigger: *T200
+  cwe: CWE-93
+  source: "Unicode CR/LF literal (filters that only catch %0d%0a)"
+
+- id: crlf-tab-cr
+  class: crlf
+  payload: "foo%09%0dContent-Type:%20text/html"
+  trigger: *T200
+  cwe: CWE-93
+  source: "Tab + CR split (some parsers accept)"
+
+- id: crlf-host-header
+  class: crlf
+  payload: "example.com%0d%0aX-Spoofed-Host:evil.com"
+  trigger: *T200
+  cwe: CWE-93
+  source: "Host-header smuggle"
+
+- id: crlf-cookie-smuggle
+  class: crlf
+  payload: "val%0d%0aSet-Cookie:%20admin=1;%20HttpOnly"
+  trigger: *T200
+  cwe: CWE-93
+  source: "Session fixation via cookie smuggle"
+
+- id: crlf-lf-only
+  class: crlf
+  payload: "val%0aX-Bypass:1"
+  trigger: *T200
+  cwe: CWE-93
+  source: "LF-only (some parsers split without CR)"

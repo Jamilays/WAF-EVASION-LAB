@@ -32,9 +32,31 @@ Variant families
 """
 from __future__ import annotations
 
+from urllib.parse import quote
+
 from wafeval.models import MutatedPayload, Payload, RequestStep
 from wafeval.models import DESTRUCTIVE_PATTERNS
 from wafeval.mutators.base import Mutator, register
+
+
+_HEADER_FORBIDDEN = "\r\n\0\t"
+
+
+def _header_safe(body: str) -> str:
+    """Percent-encode chars HTTP header values can't legally carry.
+
+    Also strips non-ASCII — RFC 9110 field-values are ASCII-only, and
+    httpx/h11 raises before sending otherwise. Unicode-escape SQLi
+    payloads (e.g. fullwidth apostrophe) that land in a header via
+    ``_cookie_first`` / ``_header_then_query`` would have crashed the
+    request; post-fix they reach the WAF as percent-encoded bytes.
+    """
+    needs_encode = any(c in body for c in _HEADER_FORBIDDEN) or any(
+        ord(c) < 0x20 or ord(c) > 0x7e for c in body
+    )
+    if not needs_encode:
+        return body
+    return quote(body, safe="!@#$&*()-_=+[]{}|;:',.<>?/\\~`^")
 
 
 def _assert_safe(steps: list[RequestStep]) -> None:
@@ -84,14 +106,14 @@ def _preamble_then_body(body: str) -> list[RequestStep]:
 
 def _cookie_first(body: str) -> list[RequestStep]:
     return [
-        RequestStep(method="GET", headers={"Cookie": f"search={body}"}),
+        RequestStep(method="GET", headers={"Cookie": f"search={_header_safe(body)}"}),
         RequestStep(method="GET", query={"q": "follow-up"}),
     ]
 
 
 def _header_then_query(body: str) -> list[RequestStep]:
     return [
-        RequestStep(method="GET", headers={"X-Search": body}),
+        RequestStep(method="GET", headers={"X-Search": _header_safe(body)}),
         RequestStep(method="GET", query={"q": body}),
     ]
 

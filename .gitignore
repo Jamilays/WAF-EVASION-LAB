@@ -16,3 +16,15 @@ results/reports/*
 # Local secrets / overrides
 docker-compose.override.yml
 docker-compose.local.yml
+
+# open-appsec runtime state — bind-mounted by --profile ml containers.
+# Only the two static config dirs (localconfig, nginx-config) are tracked.
+wafs/openappsec/config/
+wafs/openappsec/data/
+wafs/openappsec/logs/
+wafs/openappsec/postgres-data/
+wafs/openappsec/smartsync-storage/
+
+# Claude CLI local state — user-scoped, do not commit
+.claude/settings.local.json
+.claude/settings.json

