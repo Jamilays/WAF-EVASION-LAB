@@ -85,6 +85,10 @@ Parked items live in [TODO.md](TODO.md).
 - `make` is not in PATH. Use `nix-shell -p make --run "make <target>"` or call the underlying commands directly.
 - Python's numpy/pandas needs `libstdc++` + `zlib` via `nix-shell -p stdenv.cc.cc.lib zlib` with `LD_LIBRARY_PATH` set. The `tests/phase*.sh` scripts auto-reexec under nix-shell via `tests/_lib.sh`.
 
+### Compose profiles gotcha
+
+`docker compose down` only stops services in the **default** profile — anything started under `--profile ml` / `--profile paranoia-high` / `--profile dashboard` keeps running. Use `make down-all` (or `docker compose --profile paranoia-high --profile ml --profile dashboard --profile engine --profile report down`) to tear the whole lab down.
+
 ---
 
 ## Quickstart

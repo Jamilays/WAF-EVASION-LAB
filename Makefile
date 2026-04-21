@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 COMPOSE := docker compose
 
-.PHONY: help up up-paranoia up-ml up-dashboard down run run-host report report-host report-pdf clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-engine logs ps curl-matrix build-engine build-dashboard api-host
+.PHONY: help up up-paranoia up-ml up-dashboard down down-all run run-host report report-host report-pdf clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-engine logs ps curl-matrix build-engine build-dashboard api-host
 
 help:
 	@echo "WAF Evasion Lab — Make targets"
@@ -10,7 +10,8 @@ help:
 	@echo "  make up-paranoia   Start core + ModSec/Coraza paranoia-high variants"
 	@echo "  make up-ml         Start core + open-appsec stubs (--profile ml)"
 	@echo "  make up-dashboard  Start core + FastAPI + React dashboard (--profile dashboard)"
-	@echo "  make down          Stop stack (keep volumes)"
+	@echo "  make down          Stop default-profile services (WAFs + targets + traefik)"
+	@echo "  make down-all      Stop EVERYTHING across all profiles (paranoia-high, ml, dashboard, engine, report)"
 	@echo "  make config        Validate docker-compose across all profiles"
 	@echo "  make test-phase1   Run Phase 1 acceptance tests (WAF liveness)"
 	@echo "  make test-phase2   Run Phase 2 acceptance tests (routing matrix)"
@@ -49,6 +50,13 @@ up-dashboard:
 
 down:
 	$(COMPOSE) down
+
+# Plain ``docker compose down`` only touches services in the default profile —
+# anything started via ``--profile ml`` / ``--profile paranoia-high`` /
+# ``--profile dashboard`` stays running. This target enumerates every profile
+# the lab ships so a single command tears the whole lab down.
+down-all:
+	$(COMPOSE) --profile paranoia-high --profile ml --profile dashboard --profile engine --profile report down --remove-orphans
 
 clean:
 	$(COMPOSE) --profile paranoia-high --profile ml down -v --remove-orphans
