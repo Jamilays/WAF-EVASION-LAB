@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 COMPOSE := docker compose
 
-.PHONY: help up up-paranoia up-ml down run report clean reset-wafs shell-engine config test-phase1 test-phase2 logs ps curl-matrix
+.PHONY: help up up-paranoia up-ml down run run-host report report-host report-pdf clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-engine logs ps curl-matrix build-engine
 
 help:
 	@echo "WAF Evasion Lab — Make targets"
@@ -11,15 +11,23 @@ help:
 	@echo "  make up-ml         Start core + open-appsec stubs (--profile ml)"
 	@echo "  make down          Stop stack (keep volumes)"
 	@echo "  make config        Validate docker-compose across all profiles"
-	@echo "  make test-phase1   [legacy] Run Phase 1 acceptance tests"
+	@echo "  make test-phase1   Run Phase 1 acceptance tests (WAF liveness)"
 	@echo "  make test-phase2   Run Phase 2 acceptance tests (routing matrix)"
+	@echo "  make test-phase3   Run Phase 3 acceptance tests (engine end-to-end)"
+	@echo "  make test-phase4   Run Phase 4 acceptance tests (5 mutators × 100 payloads)"
+	@echo "  make test-engine   Run engine unit tests (pytest)"
 	@echo "  make curl-matrix   Probe every route through Traefik and print codes"
 	@echo "  make ps            Show container status"
 	@echo "  make logs SVC=<s>  Tail logs for service <s>"
 	@echo "  make clean         Remove containers, volumes, and results"
 	@echo "  make reset-wafs    Restart WAF services only"
-	@echo "  make run           [Phase 3+] Trigger engine test run"
-	@echo "  make report        [Phase 5+] Regenerate report"
+	@echo "  make build-engine  Build the engine Docker image"
+	@echo "  make run           Trigger an engine run (containerised)"
+	@echo "  make run-host      Trigger an engine run from the host venv"
+	@echo "  make shell-engine  Shell into a throw-away engine container"
+	@echo "  make report        Regenerate MD/LaTeX report + CSVs + figures (containerised)"
+	@echo "  make report-host   Same, but from the host venv"
+	@echo "  make report-pdf    Compile report.tex → report.pdf via the latex sidecar"
 
 up:
 	$(COMPOSE) up -d --build --wait --wait-timeout 600 --remove-orphans
@@ -60,6 +68,26 @@ test-phase1:
 test-phase2:
 	bash tests/phase2.sh
 
+test-phase3:
+	bash tests/phase3.sh
+
+test-phase4:
+	bash tests/phase4.sh
+
+test-phase5:
+	bash tests/phase5.sh
+
+test-engine:
+	@if [ ! -x engine/.venv/bin/python ]; then \
+	   echo "creating engine/.venv …"; \
+	   python3 -m venv engine/.venv && \
+	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
+	fi
+	engine/.venv/bin/python -m pytest engine/tests -q
+
+build-engine:
+	$(COMPOSE) --profile engine build engine
+
 curl-matrix:
 	@port=$${TRAEFIK_PORT:-8000}; \
 	for waf in baseline modsec coraza shadowd; do \
@@ -71,12 +99,47 @@ curl-matrix:
 	  done; \
 	done
 
-# ---- placeholders for later phases ----
+# ---- engine runners ----
+# `run` executes the engine inside the waflab network so it resolves
+# traefik by service name. `run-host` runs from a host venv against the
+# loopback-published Traefik port — faster to iterate on mutator code.
 run:
-	@echo "[stub] engine runner — Phase 3 deliverable"
+	$(COMPOSE) --profile engine run --rm engine run \
+	  --classes $(CLASSES) --mutators $(MUTATORS) $(ENGINE_ARGS)
 
-report:
-	@echo "[stub] reporter — Phase 5 deliverable"
+run-host:
+	@if [ ! -x engine/.venv/bin/python ]; then \
+	   echo "creating engine/.venv …"; \
+	   python3 -m venv engine/.venv && \
+	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
+	fi
+	engine/.venv/bin/python -m wafeval run \
+	  --traefik-url http://127.0.0.1:$${TRAEFIK_PORT:-8000} \
+	  --classes $(CLASSES) --mutators $(MUTATORS) $(ENGINE_ARGS)
 
 shell-engine:
-	@echo "[stub] engine container — Phase 3 deliverable"
+	$(COMPOSE) --profile engine run --rm --entrypoint sh engine
+
+# ---- Phase 5 reporter ----
+# RUN_ID defaults to "latest under results/raw". Override with `RUN_ID=…` on CLI.
+report:
+	$(COMPOSE) --profile report run --rm reporter $(if $(RUN_ID),--run-id $(RUN_ID))
+
+report-host:
+	@if [ ! -x engine/.venv/bin/python ]; then \
+	   echo "creating engine/.venv …"; \
+	   python3 -m venv engine/.venv && \
+	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
+	fi
+	engine/.venv/bin/python -m wafeval report $(if $(RUN_ID),--run-id $(RUN_ID))
+
+report-pdf:
+	@if [ -z "$(RUN_ID)" ]; then \
+	   echo "usage: make report-pdf RUN_ID=<run-id>"; exit 2; \
+	fi
+	$(COMPOSE) --profile report run --rm --entrypoint sh latex -c \
+	  "cd $(RUN_ID) && pdflatex -interaction=nonstopmode report.tex && pdflatex -interaction=nonstopmode report.tex"
+
+# ---- engine runner defaults ----
+CLASSES  ?= sqli,xss
+MUTATORS ?= lexical

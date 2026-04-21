@@ -1,0 +1,78 @@
+# Server-side template injection — 10 entries (prompt.md §6 ≥10).
+# Sources: PayloadsAllTheThings/Server Side Template Injection.
+#
+# Trigger markers assume the template engine evaluates the expression and
+# returns either the arithmetic result (49) or the ``ssti-probe`` string.
+# None of DVWA/Juice Shop/WebGoat have a first-class SSTI sink, so most
+# baseline runs will register baseline_fail; the point is still to test
+# WAF inspection on the wire.
+
+- id: ssti-jinja-basic
+  class: ssti
+  payload: "{{7*7}}"
+  trigger: { kind: contains, needle: "49" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — Jinja2 probe"
+
+- id: ssti-jinja-config
+  class: ssti
+  payload: "{{config.items()}}"
+  trigger: { kind: regex, pattern: "SECRET_KEY|dict_items" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — Flask config leak"
+
+- id: ssti-jinja-class
+  class: ssti
+  payload: "{{''.__class__.__mro__[1].__subclasses__()}}"
+  trigger: { kind: regex, pattern: "<class " }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — MRO walker"
+
+- id: ssti-twig-basic
+  class: ssti
+  payload: "{{7*7}}"
+  trigger: { kind: contains, needle: "49" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — Twig shares braces"
+
+- id: ssti-twig-filter
+  class: ssti
+  payload: "{{'ssti-probe'|upper}}"
+  trigger: { kind: contains, needle: "SSTI-PROBE" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — Twig filter chain"
+
+- id: ssti-freemarker-assign
+  class: ssti
+  payload: "<#assign x=7*7>${x}"
+  trigger: { kind: contains, needle: "49" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — FreeMarker"
+
+- id: ssti-velocity-context
+  class: ssti
+  payload: "#set($x=7*7)$x"
+  trigger: { kind: contains, needle: "49" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — Velocity"
+
+- id: ssti-erb-simple
+  class: ssti
+  payload: "<%= 7*7 %>"
+  trigger: { kind: contains, needle: "49" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — ERB"
+
+- id: ssti-smarty-phpinfo
+  class: ssti
+  payload: "{php}echo 'ssti-probe';{/php}"
+  trigger: { kind: contains, needle: "ssti-probe" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — Smarty"
+
+- id: ssti-dollar-brace-elexp
+  class: ssti
+  payload: "${7*7}"
+  trigger: { kind: contains, needle: "49" }
+  cwe: CWE-1336
+  source: "PayloadsAllTheThings — EL-style expr"

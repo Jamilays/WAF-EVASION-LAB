@@ -1,13 +1,20 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Phase 1 acceptance tests.
+# Phase 1 acceptance tests — WAF liveness & /healthz.
 #
-# Exit criteria (from the Phase 1 charter):
+# Updated for the Phase 2 architecture: WAFs are now per-target sidecars
+# (modsec-dvwa, coraza-dvwa, shadowd-dvwa, …) behind Traefik rather than a
+# single host-published container. We verify one representative sidecar per
+# WAF type by exec'ing into it and hitting its internal /healthz — no host
+# port mapping needed.
+#
+# Exit criteria:
 #   1. `docker compose config` validates under default, paranoia-high, and ml
 #      profiles
-#   2. All 3 core WAFs reach a "healthy" status in compose
-#   3. `GET /healthz` returns 200 on each WAF's host-bound port
-#   4. The ml profile can be composed (stub service comes up healthy)
+#   2. Core stack reaches "healthy" via `docker compose up --wait`
+#   3. One representative sidecar of each WAF type responds 200 on /healthz
+#      (tested in-container to avoid depending on host port mappings)
+#   4. All core WAF sidecars + supporting services report healthy
 # ==============================================================================
 set -euo pipefail
 
@@ -23,27 +30,38 @@ docker compose --profile paranoia-high config --quiet     || fail "paranoia-high
 docker compose --profile ml config --quiet                || fail "ml invalid";              pass "ml OK"
 
 step "2/4  Start core stack and wait for health"
-docker compose up -d --build --wait --wait-timeout 240    || fail "compose up --wait failed"
+docker compose up -d --build --wait --wait-timeout 600    || fail "compose up --wait failed"
 pass "compose up --wait returned OK"
 
-# Map of service → container-internal port we expect /healthz on
-declare -A PORTS=( [modsecurity]=8080 [coraza]=80 [shadowd-proxy]=80 )
+# Representative sidecar per WAF type → container-internal port for /healthz.
+# These match the healthchecks defined on the x-*-common anchors in compose.
+declare -A PROBE=(
+  [modsec-dvwa]=8080
+  [coraza-dvwa]=80
+  [shadowd-dvwa]=80
+)
 
-step "3/4  Verify each WAF returns 200 on /healthz"
-for svc in "${!PORTS[@]}"; do
-  host_port=$(docker compose port "$svc" "${PORTS[$svc]}" 2>/dev/null | awk -F: '{print $NF}')
-  [[ -n "$host_port" ]] || fail "no published port for $svc"
-  code=$(curl -sS -o /dev/null -w "%{http_code}" \
-               -H 'User-Agent: waflab-phase1-test' \
-               "http://127.0.0.1:${host_port}/healthz" || true)
-  # Note: host 127.0.0.1 is always IPv4, unlike the busybox wget inside
-  # minimalist WAF containers which prefers ::1. See tests/phase1.sh comments.
-  [[ "$code" == "200" ]] || fail "$svc /healthz → $code (expected 200)"
-  pass "$svc /healthz → 200 (127.0.0.1:${host_port})"
+step "3/4  Verify each WAF type returns 200 on /healthz (in-container probe)"
+for svc in "${!PROBE[@]}"; do
+  port="${PROBE[$svc]}"
+  code=$(docker compose exec -T "$svc" \
+           wget -q -U waflab-phase1-test -O /dev/null \
+                --server-response "http://127.0.0.1:${port}/healthz" 2>&1 \
+         | awk '/HTTP\// {c=$2} END{print c}')
+  [[ "$code" == "200" ]] || fail "$svc /healthz → ${code:-no-response} (expected 200)"
+  pass "$svc /healthz → 200 (port ${port})"
 done
 
 step "4/4  Verify container health state reports 'healthy'"
-for svc in modsecurity coraza shadowd shadowd-db shadowd-proxy whoami; do
+CORE_SERVICES=(
+  traefik
+  dvwa-db dvwa webgoat juiceshop
+  shadowd-db shadowd
+  modsec-dvwa modsec-webgoat modsec-juiceshop
+  coraza-dvwa coraza-webgoat coraza-juiceshop
+  shadowd-dvwa shadowd-webgoat shadowd-juiceshop
+)
+for svc in "${CORE_SERVICES[@]}"; do
   cid=$(docker compose ps -q "$svc")
   [[ -n "$cid" ]] || fail "$svc has no container"
   state=$(docker inspect -f '{{.State.Status}}' "$cid")
@@ -57,4 +75,4 @@ for svc in modsecurity coraza shadowd shadowd-db shadowd-proxy whoami; do
   pass "$svc running (health=$health)"
 done
 
-printf '\n\033[1;32mPhase 1 PASSED\033[0m — 3 WAFs healthy, ML stub available under --profile ml\n'
+printf '\n\033[1;32mPhase 1 PASSED\033[0m — 3 WAF types healthy across 9 sidecars, ML stub available under --profile ml\n'

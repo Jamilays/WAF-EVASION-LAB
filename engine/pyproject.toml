@@ -1,0 +1,45 @@
+[build-system]
+requires = ["hatchling>=1.21"]
+build-backend = "hatchling.build"
+
+[project]
+name = "wafeval"
+version = "0.3.0"
+description = "WAF Evasion Lab — mutation + testing engine (Phase 3)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+authors = [{ name = "waf-evasion-lab" }]
+dependencies = [
+    "httpx[http2]>=0.27,<1.0",
+    "pydantic>=2.7,<3.0",
+    "pyyaml>=6.0,<7.0",
+    "structlog>=24.1,<25.0",
+    "anyio>=4.3,<5.0",
+    "pandas>=2.2,<3.0",
+    "matplotlib>=3.8,<4.0",
+    "seaborn>=0.13,<1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.1,<9.0",
+    "pytest-asyncio>=0.23,<1.0",
+    "respx>=0.21,<1.0",
+]
+
+[project.scripts]
+wafeval = "wafeval.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/wafeval"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+filterwarnings = ["error"]
+
+[tool.wafeval]
+# Runtime defaults. Override per-invocation on the CLI or via env.
+default_concurrency = 10
+default_timeout_s = 15

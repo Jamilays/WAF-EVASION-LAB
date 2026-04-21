@@ -413,3 +413,82 @@ services:
     networks: [waflab]
     labels:
       waflab.stub: "true"
+
+  # ============================================================================
+  # Engine (profile: engine) — Phase 3 mutation + testing pipeline.
+  # `make run` triggers: docker compose run --rm engine run --classes sqli,xss
+  # ============================================================================
+  engine:
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    image: waflab/engine:phase3
+    container_name: waflab-engine
+    profiles: ["engine"]
+    networks: [waflab]
+    # Run as the host user so the bind-mounted results/raw stays writable
+    # from both sides without chowning. Defaults match the typical Linux
+    # desktop (uid 1000). Override via ENGINE_UID/ENGINE_GID in .env.
+    user: "${ENGINE_UID:-1000}:${ENGINE_GID:-100}"
+    environment:
+      TRAEFIK_URL: "http://traefik:80"
+      RESULTS_ROOT: "/results"
+      MAX_CONCURRENCY: "${MAX_CONCURRENCY:-10}"
+      HOME: "/tmp"
+    volumes:
+      - ./results/raw:/results
+    depends_on:
+      traefik:        { condition: service_healthy }
+      dvwa:           { condition: service_healthy }
+      webgoat:        { condition: service_healthy }
+      juiceshop:      { condition: service_healthy }
+      modsec-dvwa:    { condition: service_healthy }
+      coraza-dvwa:    { condition: service_healthy }
+      shadowd-dvwa:   { condition: service_healthy }
+
+  # ============================================================================
+  # Reporter (profile: report) — Phase 5.
+  # Two services in one profile:
+  #   * `reporter`   — runs the engine image in `report` mode against the
+  #                    bind-mounted results/ tree. No network depends_on so
+  #                    you can regenerate offline.
+  #   * `latex`      — TeX Live sidecar that compiles report.tex → report.pdf.
+  #                    Separate so users who don't need a PDF can skip the
+  #                    ~6 GB texlive image.
+  # ============================================================================
+  reporter:
+    image: waflab/engine:phase3      # same image as the engine, different entrypoint
+    build:
+      context: ./engine
+      dockerfile: Dockerfile
+    container_name: waflab-reporter
+    profiles: ["report"]
+    networks: [waflab]
+    user: "${ENGINE_UID:-1000}:${ENGINE_GID:-100}"
+    environment:
+      RESULTS_ROOT: "/results/raw"
+      HOME: "/tmp"
+    volumes:
+      - ./results:/results
+    working_dir: /results
+    entrypoint: ["wafeval", "report"]
+    command:
+      - "--results-root=/results/raw"
+      - "--processed-dir=/results/processed"
+      - "--figures-dir=/results/figures"
+      - "--reports-dir=/results/reports"
+
+  latex:
+    image: texlive/texlive:TL2024-historic
+    container_name: waflab-latex
+    profiles: ["report"]
+    networks: [waflab]
+    user: "${ENGINE_UID:-1000}:${ENGINE_GID:-100}"
+    environment:
+      HOME: "/tmp"
+    volumes:
+      - ./results/reports:/work
+    working_dir: /work
+    # pdflatex is invoked via `make report-pdf` which passes the run-id
+    entrypoint: ["sh", "-c"]
+    command: ["echo 'usage: make report-pdf RUN_ID=<id>'"]

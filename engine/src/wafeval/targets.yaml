@@ -1,0 +1,188 @@
+# Target endpoint map — (target, vuln_class) → request template.
+#
+# Each entry describes how to turn a payload body into a concrete HTTP
+# request. The runner substitutes {payload} with the URL-encoded mutated
+# payload. `needs_session_cookies` declares which cookies to attach — for
+# DVWA the init container bootstraps the schema and sets a known security
+# level, but the /vulnerabilities/* pages require an authenticated session.
+# Phase 3 takes the expedient path: for DVWA endpoints we send the known-good
+# admin session we mint via a pre-run login (see runner/session.py).
+#
+# WebGoat + Juice Shop get pragmatic "generic GET" endpoints so the engine
+# produces data across the full 3×3 WAF × target matrix; full per-app
+# triggers (authenticated WebGoat lessons, Juice Shop API routes) land in
+# Phase 4. Baseline-trigger verification is best-effort: if the baseline
+# doesn't fire, the verdict is marked baseline_fail and excluded from the
+# aggregate bypass stats the analyzer produces (Phase 5).
+
+targets:
+  dvwa:
+    base_path: ""
+    login:
+      method: POST
+      path: "/login.php"
+      form_tokenized: true    # DVWA requires CSRF-token scrape from GET /login.php
+      username: admin
+      password: password
+    endpoints:
+      sqli:
+        method: GET
+        path: "/vulnerabilities/sqli/"
+        query:
+          id: "{payload}"
+          Submit: "Submit"
+        expect_auth: true
+      xss:
+        method: GET
+        path: "/vulnerabilities/xss_r/"
+        query:
+          name: "{payload}"
+        expect_auth: true
+      cmdi:
+        method: POST
+        path: "/vulnerabilities/exec/"
+        form:
+          ip: "{payload}"
+          Submit: "Submit"
+        expect_auth: true
+      lfi:
+        method: GET
+        path: "/vulnerabilities/fi/"
+        query:
+          page: "{payload}"
+        expect_auth: true
+      ssti:
+        method: GET
+        path: "/vulnerabilities/xss_r/"
+        query:
+          name: "{payload}"
+        expect_auth: true
+        notes: "No first-class SSTI sink in DVWA; WAF-view only"
+      xxe:
+        method: GET
+        path: "/vulnerabilities/xss_r/"
+        query:
+          name: "{payload}"
+        expect_auth: true
+        notes: "No XML sink in DVWA; context_displacement converts to application/xml for WAF-view"
+
+  webgoat:
+    base_path: ""
+    endpoints:
+      sqli:
+        method: GET
+        path: "/WebGoat/login"
+        query:
+          q: "{payload}"
+        expect_auth: false
+        notes: "Generic WAF-view endpoint; proper lesson targeting deferred"
+      xss:
+        method: GET
+        path: "/WebGoat/login"
+        query:
+          q: "{payload}"
+        expect_auth: false
+      cmdi:
+        method: GET
+        path: "/WebGoat/login"
+        query:
+          q: "{payload}"
+        expect_auth: false
+      lfi:
+        method: GET
+        path: "/WebGoat/login"
+        query:
+          q: "{payload}"
+        expect_auth: false
+      ssti:
+        method: GET
+        path: "/WebGoat/login"
+        query:
+          q: "{payload}"
+        expect_auth: false
+      xxe:
+        method: GET
+        path: "/WebGoat/login"
+        query:
+          q: "{payload}"
+        expect_auth: false
+
+  juiceshop:
+    base_path: ""
+    endpoints:
+      sqli:
+        method: GET
+        path: "/rest/products/search"
+        query:
+          q: "{payload}"
+        expect_auth: false
+        notes: "/rest/products/search is Juice Shop's canonical SQLi vector"
+      xss:
+        method: GET
+        path: "/rest/products/search"
+        query:
+          q: "{payload}"
+        expect_auth: false
+      cmdi:
+        method: GET
+        path: "/rest/products/search"
+        query:
+          q: "{payload}"
+        expect_auth: false
+      lfi:
+        method: GET
+        path: "/rest/products/search"
+        query:
+          q: "{payload}"
+        expect_auth: false
+      ssti:
+        method: GET
+        path: "/rest/products/search"
+        query:
+          q: "{payload}"
+        expect_auth: false
+      xxe:
+        method: GET
+        path: "/rest/products/search"
+        query:
+          q: "{payload}"
+        expect_auth: false
+
+routes:
+  # Traefik Host-header → (waf, target). Baseline is the "no WAF" control.
+  - host: baseline-dvwa.local
+    waf: baseline
+    target: dvwa
+  - host: baseline-webgoat.local
+    waf: baseline
+    target: webgoat
+  - host: baseline-juiceshop.local
+    waf: baseline
+    target: juiceshop
+  - host: modsec-dvwa.local
+    waf: modsec
+    target: dvwa
+  - host: modsec-webgoat.local
+    waf: modsec
+    target: webgoat
+  - host: modsec-juiceshop.local
+    waf: modsec
+    target: juiceshop
+  - host: coraza-dvwa.local
+    waf: coraza
+    target: dvwa
+  - host: coraza-webgoat.local
+    waf: coraza
+    target: webgoat
+  - host: coraza-juiceshop.local
+    waf: coraza
+    target: juiceshop
+  - host: shadowd-dvwa.local
+    waf: shadowd
+    target: dvwa
+  - host: shadowd-webgoat.local
+    waf: shadowd
+    target: webgoat
+  - host: shadowd-juiceshop.local
+    waf: shadowd
+    target: juiceshop

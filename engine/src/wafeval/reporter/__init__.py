@@ -1,0 +1,11 @@
+"""Reporter — Markdown + LaTeX report rendering (prompt.md §10).
+
+``render_markdown`` is callable directly; ``render_latex`` produces the
+``.tex`` source alongside it but relies on the ``texlive`` sidecar container
+(``--profile report``) to produce a PDF. Both variants consume the same
+bypass-rate DataFrame computed by ``wafeval.analyzer``.
+"""
+from wafeval.reporter.markdown import render_markdown
+from wafeval.reporter.latex import render_latex
+
+__all__ = ["render_markdown", "render_latex"]
