@@ -7,5 +7,11 @@ bypass-rate DataFrame computed by ``wafeval.analyzer``.
 """
 from wafeval.reporter.markdown import render_markdown
 from wafeval.reporter.latex import render_latex
+from wafeval.reporter.combined import render_combined_markdown, render_combined_latex
 
-__all__ = ["render_markdown", "render_latex"]
+__all__ = [
+    "render_markdown",
+    "render_latex",
+    "render_combined_markdown",
+    "render_combined_latex",
+]

@@ -16,6 +16,7 @@ import pandas as pd
 
 from wafeval.analyzer.aggregate import load_run
 from wafeval.analyzer.bypass import compute_rates
+from wafeval.analyzer.combined import combine_runs
 from wafeval.reporter.hall_of_fame import hall_of_fame
 
 
@@ -249,6 +250,53 @@ def run_hall_of_fame(raw_root: Path, run_id: str, top_n: int = 20) -> list[dict[
     df = _load_cached(raw_root, run_id)
     rows = hall_of_fame(df, top_n=top_n)
     return _df_to_json_rows(rows)
+
+
+def run_combined(
+    raw_root: Path,
+    run_ids: list[str],
+    anchor_target: str = "dvwa",
+) -> dict[str, Any]:
+    """Merge ``run_ids`` and return combined bypass rates + provenance.
+
+    Shape mirrors ``run_bypass_rates`` (true_bypass DVWA + waf_view all
+    targets, with baseline_fail_rate annotations) but across the union of
+    the merged runs. The ``waf_provenance`` map lets the dashboard render a
+    "which run did this WAF's numbers come from?" tooltip without a second
+    request.
+    """
+    df, provenance = combine_runs(raw_root, run_ids)
+    if df.empty:
+        return {
+            "run_ids": run_ids, "waf_provenance": provenance,
+            "rows": [], "wafs": [],
+        }
+
+    frames: list[pd.DataFrame] = []
+    dvwa = df[df["target"] == anchor_target]
+    tb = compute_rates(dvwa[dvwa["waf"] != "baseline"], ["waf", "mutator"], lens="true_bypass")
+    if not tb.empty:
+        bf = _baseline_fail_share(dvwa[dvwa["waf"] != "baseline"], ["waf", "mutator"])
+        tb = tb.merge(bf, on=["waf", "mutator"], how="left").assign(target=anchor_target)
+        frames.append(tb)
+
+    wv = compute_rates(df[df["waf"] != "baseline"], ["waf", "mutator", "target"], lens="waf_view")
+    if not wv.empty:
+        bf = _baseline_fail_share(df[df["waf"] != "baseline"], ["waf", "mutator", "target"])
+        wv = wv.merge(bf, on=["waf", "mutator", "target"], how="left")
+        frames.append(wv)
+
+    rows: list[dict[str, Any]] = []
+    if frames:
+        rows = _df_to_json_rows(pd.concat(frames, ignore_index=True))
+
+    wafs = sorted(w for w in df["waf"].unique().tolist() if w != "baseline")
+    return {
+        "run_ids": run_ids,
+        "waf_provenance": provenance,
+        "wafs": wafs,
+        "rows": rows,
+    }
 
 
 def compare_runs(raw_root: Path, a: str, b: str, anchor_target: str = "dvwa") -> dict[str, Any]:

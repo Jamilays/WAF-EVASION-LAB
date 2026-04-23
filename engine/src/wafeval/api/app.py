@@ -73,6 +73,20 @@ def build_app() -> FastAPI:
         p = _paths()
         return store.compare_runs(p["raw"], a, b)
 
+    @app.get("/runs/combined")
+    def combined_runs(ids: str = Query(..., description="comma-separated run_ids; later ids override earlier on WAF overlap")) -> dict[str, Any]:
+        """Merge N runs and return cross-run bypass rates + WAF provenance.
+
+        Enables the dashboard to surface the 4-WAF headline table without
+        the user eyeballing three separate run views. Ordering semantics
+        match ``wafeval report-combined``: last-in-list wins on overlap.
+        """
+        p = _paths()
+        run_ids = [r.strip() for r in ids.split(",") if r.strip()]
+        if not run_ids:
+            raise HTTPException(400, "ids query parameter must contain at least one run_id")
+        return store.run_combined(p["raw"], run_ids)
+
     @app.get("/runs/{run_id}")
     def run_manifest(run_id: str) -> dict[str, Any]:
         p = _paths()

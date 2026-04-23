@@ -10,7 +10,7 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 
 ## Status
 
-**Phase 7 in progress.** All four WAFs legitimately enforcing, 201-payload corpus across 12 vuln classes, engine + analyzer + reporter + dashboard all green, paranoia-high comparison data captured, open-appsec ML agent wired in for real.
+**Phase 7 complete.** All four WAFs legitimately enforcing, 201-payload corpus across 12 vuln classes, engine + analyzer + reporter + dashboard all green, paranoia-high comparison captured, open-appsec ML agent wired in for real, combined 4-WAF cross-run report + Cross-WAF dashboard tab shipped, and the open-appsec `minimum-confidence` ladder ablation now has full 4-level data.
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -20,7 +20,7 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 | 4 | 5 mutators + 100+ payload corpus | ✅ |
 | 5 | Analyzer + Markdown/LaTeX reporter | ✅ |
 | 6 | FastAPI (`--profile dashboard`) + Vite/React/TS/Tailwind dashboard | ✅ |
-| **7** | Real shadowd + open-appsec, expanded corpus (201 payloads, 12 classes), PL1↔PL4 compare, Hall of Fame | ⏳ *in progress* |
+| 7 | Real shadowd + open-appsec, expanded corpus (201 payloads, 12 classes), PL1↔PL4 compare, Hall of Fame, cross-WAF report + dashboard tab, open-appsec confidence-ladder ablation | ✅ |
 
 Parked items live in [TODO.md](TODO.md).
 
@@ -65,8 +65,24 @@ Parked items live in [TODO.md](TODO.md).
 ### API / Dashboard (`--profile dashboard`)
 
 - FastAPI on 127.0.0.1:8001, read-only.
-- Endpoints: `/health`, `/runs`, `/runs/latest`, `/runs/{id}/{manifest|live|bypass-rates|per-payload|per-variant|records/.../...|figures/...|hall-of-fame|report}`, `/runs/compare`.
-- Dashboard on 127.0.0.1:3000 (nginx-served Vite bundle + `/api/*` proxy). Tabs: Live Run, Results (heatmap + table + baseline_fail column), **Hall of Fame**, Payload Explorer (12-class dropdown), Compare Runs.
+- Endpoints: `/health`, `/runs`, `/runs/latest`, `/runs/{id}/{manifest|live|bypass-rates|per-payload|per-variant|records/.../...|figures/...|hall-of-fame|report}`, `/runs/compare`, `/runs/combined?ids=a,b,c`.
+- Dashboard on 127.0.0.1:3000 (nginx-served Vite bundle + `/api/*` proxy). Tabs: Live Run, Results (heatmap + table + baseline_fail column), **Cross-WAF** (multi-run provenance heatmap), **Hall of Fame**, Payload Explorer (12-class dropdown), Compare Runs.
+- The Cross-WAF tab surfaces the same 6-column headline table as `report-combined.md` — pick the runs to merge, reorder for last-in-list provenance, switch lens/target, tooltip reveals each cell's source run.
+
+### Combined (cross-run) report
+
+- `wafeval report-combined --run-ids a,b,c --out-id combined` merges N runs into a single report. For WAFs that appear in more than one run, the **last run in the list wins** (so put the canonical/freshest run for each WAF at the end).
+- Outputs: `results/processed/<out-id>/{per_variant,per_payload,bypass_rates}.csv` and `results/reports/<out-id>/report-combined.{md,tex}`.
+- The headline table has one column per WAF present across the merged runs, ordered `modsec, coraza, shadowd, openappsec, modsec-ph, coraza-ph, <unknowns alphabetical>`. DVWA is the true-bypass anchor; an Appendix lists waf-view rates across every target.
+- Shortcut: `make report-combined RUN_IDS=a,b,c [OUT_ID=combined]` (containerised) / `make report-combined-host RUN_IDS=a,b,c` (host venv).
+- `results/reports/combined-phase7/` is the headline 4-WAF comparison shipped in Phase 7 (merges `research-20260421T141410Z` + `paranoia-high-20260421T151636Z` + `openappsec-20260421T162710Z`).
+
+### Ladder / ordered-ablation reporter
+
+- `wafeval ladder --steps critical:<id1>,high:<id2>,medium:<id3>,low:<id4> --target juiceshop --out-id openappsec-ladder` emits a line chart (PNG + SVG) + Markdown report where each "step" is a separate run. One line per (waf, mutator); x-axis is the caller-supplied step order. Generic over the knob — works equally for CRS paranoia ablations or any other one-dimensional sweep.
+- Outputs: `results/processed/<out-id>/ladder.csv`, `results/figures/<out-id>/ladder.{png,svg}`, `results/reports/<out-id>/report-ladder.md`.
+- For open-appsec specifically, [tests/openappsec_ladder.sh](tests/openappsec_ladder.sh) (`make ladder-openappsec`) automates the full `critical → high → medium → low` sweep: rewrites `minimum-confidence` in `wafs/openappsec/localconfig/local_policy.yaml`, waits for the smart-sync sidecar to reload, re-runs the corpus at each level, then invokes `wafeval ladder` to produce the combined artefact. **Needs `make up-ml` first; ≈40 min wall-clock** on a modest workstation. The script leaves the policy file on whatever level ran last; re-set to `critical` afterwards.
+- Headline 4-level ablation shipped in `results/reports/openappsec-ladder-20260423T084442Z/`. See "Research findings so far" below for the (unexpectedly flat) result.
 
 ### Runtime knobs
 
@@ -206,7 +222,7 @@ bash tests/phase5.sh   # analyzer + reporter
 bash tests/phase6.sh   # FastAPI + dashboard
 ```
 
-Engine unit tests (85 passing as of Phase-7 work):
+Engine unit tests (99 passing as of Phase-7 close):
 
 ```bash
 nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-link '<nixpkgs>' -A stdenv.cc.cc.lib)/lib:\$(nix-build --no-out-link '<nixpkgs>' -A zlib)/lib:\$LD_LIBRARY_PATH engine/.venv/bin/python -m pytest engine/tests -q"
@@ -251,7 +267,10 @@ Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice 
 - **Coraza PL4 closes the encoding gap entirely** (5.7% → 0% on DVWA, 55% → 0% on Juice Shop).
 - **ModSec PL4 *does not*** — its PARANOIA env var doesn't unlock the JSON-SQL plugin rules. Real-world deployment gotcha worth flagging.
 
-**open-appsec** — corpus run `openappsec-*` (scheduled; results will land in `results/raw/openappsec-<stamp>/`). Expected to show a fundamentally different bypass profile than rule-based WAFs because it's ML-based. Minimum-confidence ladder (critical/high/medium/low) is the natural ablation dimension.
+**open-appsec** (runs `openappsec-20260421T162710Z` at `critical`, plus the 4-level ladder `openappsec-{critical,high,medium,low}-2026042{2,3}T*`):
+
+- Per-mutator bypass rate on Juice Shop (waf_view) from the ladder run: lexical ≈ 43%, encoding ≈ 51%, structural ≈ 21%, context_displacement ≈ 20%, multi_request ≈ 56%. The ML agent holds structural / context-displacement *better* than CRS holds the same mutators (both sit ~20%), but is *more leaky* on lexical and multi-request than CRS on JSON bodies.
+- **The `minimum-confidence` ladder is flat.** Sweeping `critical → high → medium → low` moves every mutator by <1 percentage point — well inside the Wilson CIs at this N (~±4 pp). That's an empirical result, not a tooling bug: the agent's classifier appears bimodal on this corpus, so loosening the threshold doesn't reclassify payloads. The knob would only matter on genuinely ambiguous traffic, which attack-only payloads don't produce. A true ROC-shaped curve needs a benign-traffic corpus (parked in [TODO.md](TODO.md)).
 
 ---
 
@@ -297,7 +316,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full detail. Developer onbo
 
 Replicates the methodology of:
 
-> Yusifova, J. *Evasion of Web Application Firewalls Through Payload Obfuscation: A Black-Box Study.* (See [paper.md](paper.md) for the extracted text.)
+> Yusifova, J. *Evasion of Web Application Firewalls Through Payload Obfuscation: A Black-Box Study.* Bachelor's thesis, Baku Higher Oil School.
 
 Phase-7 research extensions draw on:
 - [PayloadsAllTheThings — WAF Bypass collection](https://github.com/kh4sh3i/WAF-Bypass)

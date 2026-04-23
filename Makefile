@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 COMPOSE := docker compose
 
-.PHONY: help up up-paranoia up-ml up-dashboard down down-all run run-host report report-host report-pdf clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-engine logs ps curl-matrix build-engine build-dashboard api-host
+.PHONY: help up up-paranoia up-ml up-dashboard down down-all run run-host report report-combined report-combined-host report-host report-pdf ladder ladder-host ladder-openappsec clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-engine logs ps curl-matrix build-engine build-dashboard api-host
 
 help:
 	@echo "WAF Evasion Lab — Make targets"
@@ -32,6 +32,17 @@ help:
 	@echo "  make report        Regenerate MD/LaTeX report + CSVs + figures (containerised)"
 	@echo "  make report-host   Same, but from the host venv"
 	@echo "  make report-pdf    Compile report.tex → report.pdf via the latex sidecar"
+	@echo "  make report-combined RUN_IDS=a,b,c [OUT_ID=combined]"
+	@echo "                     Merge N runs into report-combined.md/.tex (containerised)"
+	@echo "  make report-combined-host RUN_IDS=a,b,c [OUT_ID=combined]"
+	@echo "                     Same, but from the host venv"
+	@echo "  make ladder STEPS=label1:run-a,label2:run-b [TARGET=juiceshop] [OUT_ID=ladder]"
+	@echo "                     Render an ordered-ablation line chart (containerised)"
+	@echo "  make ladder-host STEPS=… [TARGET=… OUT_ID=…]"
+	@echo "                     Same, but from the host venv"
+	@echo "  make ladder-openappsec"
+	@echo "                     Automate the open-appsec min-confidence critical→low sweep"
+	@echo "                     (needs 'make up-ml' stack up; ≈40 min wall-clock)"
 
 up:
 	$(COMPOSE) up -d --build --wait --wait-timeout 600 --remove-orphans
@@ -174,6 +185,64 @@ report-pdf:
 	fi
 	$(COMPOSE) --profile report run --rm --entrypoint sh latex -c \
 	  "cd $(RUN_ID) && pdflatex -interaction=nonstopmode report.tex && pdflatex -interaction=nonstopmode report.tex"
+
+# ---- cross-run consolidated reporter ----
+# RUN_IDS is a comma-separated list; later run_ids override earlier on WAF
+# overlap (so put "canonical" runs for each WAF at the end). OUT_ID names
+# the directory under processed/ and reports/ that the merged artefacts
+# land under.
+OUT_ID ?= combined
+report-combined:
+	@if [ -z "$(RUN_IDS)" ]; then \
+	   echo "usage: make report-combined RUN_IDS=<a,b,c> [OUT_ID=combined]"; exit 2; \
+	fi
+	$(COMPOSE) --profile report run --rm --entrypoint wafeval reporter \
+	  report-combined \
+	  --run-ids $(RUN_IDS) --out-id $(OUT_ID) \
+	  --results-root /results/raw \
+	  --processed-dir /results/processed \
+	  --reports-dir /results/reports
+
+report-combined-host:
+	@if [ -z "$(RUN_IDS)" ]; then \
+	   echo "usage: make report-combined-host RUN_IDS=<a,b,c> [OUT_ID=combined]"; exit 2; \
+	fi
+	@if [ ! -x engine/.venv/bin/python ]; then \
+	   echo "creating engine/.venv …"; \
+	   python3 -m venv engine/.venv && \
+	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
+	fi
+	engine/.venv/bin/python -m wafeval report-combined \
+	  --run-ids $(RUN_IDS) --out-id $(OUT_ID)
+
+# ---- ladder / ordered-ablation analyzer ----
+TARGET ?= juiceshop
+LADDER_OUT_ID ?= ladder
+ladder:
+	@if [ -z "$(STEPS)" ]; then \
+	   echo "usage: make ladder STEPS=<label1:run-a,label2:run-b,…> [TARGET=juiceshop] [LADDER_OUT_ID=ladder]"; exit 2; \
+	fi
+	$(COMPOSE) --profile report run --rm --entrypoint wafeval reporter \
+	  ladder --steps $(STEPS) --target $(TARGET) --out-id $(LADDER_OUT_ID) \
+	  --results-root /results/raw \
+	  --processed-dir /results/processed \
+	  --figures-dir /results/figures \
+	  --reports-dir /results/reports
+
+ladder-host:
+	@if [ -z "$(STEPS)" ]; then \
+	   echo "usage: make ladder-host STEPS=<label1:run-a,label2:run-b,…> [TARGET=juiceshop] [LADDER_OUT_ID=ladder]"; exit 2; \
+	fi
+	@if [ ! -x engine/.venv/bin/python ]; then \
+	   echo "creating engine/.venv …"; \
+	   python3 -m venv engine/.venv && \
+	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
+	fi
+	engine/.venv/bin/python -m wafeval ladder \
+	  --steps $(STEPS) --target $(TARGET) --out-id $(LADDER_OUT_ID)
+
+ladder-openappsec:
+	bash tests/openappsec_ladder.sh
 
 # ---- engine runner defaults ----
 CLASSES  ?= sqli,xss

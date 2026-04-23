@@ -6,12 +6,14 @@ import Results from "./tabs/Results";
 import PayloadExplorer from "./tabs/PayloadExplorer";
 import CompareRuns from "./tabs/CompareRuns";
 import HallOfFame from "./tabs/HallOfFame";
+import CrossWAF from "./tabs/CrossWAF";
 
-type Tab = "live" | "results" | "hof" | "explorer" | "compare";
+type Tab = "live" | "results" | "hof" | "explorer" | "compare" | "crosswaf";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "live",     label: "Live Run" },
   { id: "results",  label: "Results" },
+  { id: "crosswaf", label: "Cross-WAF" },
   { id: "hof",      label: "Hall of Fame" },
   { id: "explorer", label: "Payload Explorer" },
   { id: "compare",  label: "Compare Runs" },
@@ -101,6 +103,7 @@ export default function App() {
         )}
         {tab === "live"     && runId && <LiveRun    runId={runId} />}
         {tab === "results"  && runId && <Results   runId={runId} />}
+        {tab === "crosswaf" && <CrossWAF runs={runs} />}
         {tab === "hof"      && runId && <HallOfFame runId={runId} />}
         {tab === "explorer" && runId && <PayloadExplorer runId={runId} />}
         {tab === "compare"  && <CompareRuns runs={runs} />}

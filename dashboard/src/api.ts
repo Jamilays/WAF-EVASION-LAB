@@ -1,7 +1,7 @@
 // Thin fetch wrapper. Base URL is /api in prod (nginx proxies) and also
 // /api in dev (Vite proxy). VITE_API_BASE lets the smoke test override it.
 import type {
-  BypassRateRow, CompareResponse, LiveSnapshot,
+  BypassRateRow, CombinedResponse, CompareResponse, LiveSnapshot,
   RecordDetail, RunSummary, VariantListResponse,
 } from "./types";
 
@@ -32,4 +32,6 @@ export const api = {
                j<RecordDetail>(`/runs/${id}/records/${waf}/${target}/${pid}/${variant}`),
   compare:   (a: string, b: string) =>
                j<CompareResponse>("/runs/compare", { a, b }),
+  combined:  (ids: string[]) =>
+               j<CombinedResponse>("/runs/combined", { ids: ids.join(",") }),
 };

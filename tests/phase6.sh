@@ -137,6 +137,24 @@ for row in d['rows']:
 "
 pass "/runs/compare reflexive OK"
 
+# /runs/combined (single-run "merge" → provenance has one entry per WAF)
+curl -sSf "http://127.0.0.1:$API_PORT/runs/combined?ids=$RUN_ID" >/tmp/api-combined.json
+"$PY" -c "
+import json; d=json.load(open('/tmp/api-combined.json'))
+assert d['run_ids']==['$RUN_ID']
+assert isinstance(d['waf_provenance'], dict)
+assert isinstance(d['wafs'], list)
+# every returned WAF must be traceable back to our one run_id
+for w, rid in d['waf_provenance'].items():
+    assert rid=='$RUN_ID', (w, rid)
+"
+pass "/runs/combined single-run OK"
+
+# /runs/combined 400 on empty ids
+code=$(curl -sS -o /tmp/api-combined-err -w '%{http_code}' "http://127.0.0.1:$API_PORT/runs/combined?ids=")
+[[ "$code" == "400" ]] || fail "/runs/combined empty ids → HTTP $code (expected 400)"
+pass "/runs/combined empty ids rejected"
+
 step "6/6  Dashboard nginx serves HTML + proxies /api/"
 code=$(curl -sS -o /tmp/dash-index.html -w '%{http_code}' "http://127.0.0.1:$DASHBOARD_PORT/")
 [[ "$code" == "200" ]] || fail "dashboard /: HTTP $code"

@@ -5,68 +5,6 @@ in rough priority order (top = most valuable-per-hour, bottom = largest).
 
 ---
 
-## Immediate follow-ups from the open-appsec integration
-
-### Consolidated 4-WAF research report
-
-We now have three separate run_ids that together form the complete
-4-WAF × 2-target × 12-class comparison the prompt originally asked for:
-
-- `research-20260421T141410Z` — ModSec PL1, Coraza PL1, Shadow Daemon
-- `paranoia-high-20260421T151636Z` — ModSec PL4, Coraza PL4
-- `openappsec-20260421T162710Z` — open-appsec (minimum-confidence=critical)
-
-The reporter currently writes one report per run. For a publishable
-comparison we need a **cross-run aggregator** that:
-
-- Accepts multiple `--run-id` arguments, merges their `bypass_rates.csv`
-  into a single table (waf × mutator × target)
-- Produces a headline Table 1 with columns `modsec / coraza / shadowd /
-  openappsec / modsec-ph / coraza-ph`
-- Emits `report-combined.md` + `report-combined.tex` suitable for the
-  paper's Results section
-- New endpoint `/runs/combined?ids=a,b,c` so the dashboard can surface
-  this without the user eyeballing three tables
-
-**Effort:** ~half a day. Mostly analyzer plumbing; data already exists.
-
-**Key finding to capture in the write-up** (openappsec-20260421T162710Z):
-- open-appsec × DVWA → **0% bypass** across every class (2217 attacks,
-  all caught by the ML classifier)
-- open-appsec × Juice Shop → **40–74% bypass** on nearly every WAF-view
-  class (crlf 65%, ssrf 74%, nosql 59%, ldap 51%, jndi 45%); SQLi stays
-  at 2.6%. The ML model is evidently well-trained on DVWA-style PHP
-  attack patterns but under-weights SQLite-dialect / JSON-operator /
-  scheme-based payloads on the JSON API.
-
----
-
-### open-appsec minimum-confidence ladder ablation
-
-`wafs/openappsec/localconfig/local_policy.yaml` currently sets
-`minimum-confidence: critical` (strictest — fewest FPs, most missed
-attacks). Drop through `high` → `medium` → `low`, rerun each time,
-plot the bypass-rate vs false-positive-rate curve. This is the **ML
-equivalent of the CRS paranoia ablation** ([TODO #4 below](#4-paranoia-level-ablation-on-all-4-wafs))
-and would make the paper's Discussion section.
-
-**Effort:** ~30 min per confidence level (4 rerun × ~8 min plus policy
-reload); total ≤ 2 hours.
-
----
-
-### Dashboard heatmap: surface all 4 WAFs side-by-side
-
-Dashboard Results tab currently shows one run at a time. Add a "Cross-WAF"
-view that picks the latest run per WAF and renders a 4-column heatmap.
-Needs the cross-run API endpoint above plus a new tab component. Tie it
-to the consolidated report so every published figure has a dashboard
-equivalent.
-
-**Effort:** ~2 hours after the cross-run aggregator is in.
-
----
-
 ## Near-term (half-day each)
 
 ### 1. Restore WebGoat with real lesson endpoints
@@ -151,7 +89,30 @@ companion paper.
 
 ---
 
-### 6. Replicate the paper's original 40-payload subset
+### 6. Benign-traffic corpus for true FPR / ROC curves
+
+The open-appsec confidence-ladder ablation came out flat (bypass rate
+≈constant across `critical → high → medium → low`) because every payload
+in the current corpus is an attack. To measure the real trade-off — each
+level's bypass rate *against its false-positive rate* — we need a benign
+payload source.
+
+**What's needed:**
+- A second YAML corpus under `engine/src/wafeval/payloads/` holding benign
+  traffic shaped like the real sinks (login form posts, product search
+  terms, path components, typical JSON API bodies)
+- Engine wiring so a run can operate over "benign" mode (same routes,
+  verdict flipped: `ALLOWED` is success, `BLOCKED` is a false positive)
+- `wafeval ladder --fpr-run <benign-run-id>` second axis so the line
+  chart becomes bypass-rate (from attacks) vs FPR (from benign). With
+  this, the open-appsec ladder should produce a recognisable ROC shape.
+
+Cleanly pluggable into the existing aggregator — no schema changes to
+the raw record format.
+
+---
+
+### 7. Replicate the original 40-payload subset
 
 The paper used 20 SQLi + 20 XSS, specific entries. Running JUST those in
 our engine (ignoring the 161 we added) gives an apples-to-apples
@@ -167,7 +128,7 @@ reproduction number for the Discussion section.
 
 ## Long-term / aspirational
 
-### 7. Publish replication paper
+### 8. Publish replication paper
 
 We have enough data for a short replication report:
 - Abstract + Intro can cite our numbers vs the paper's
@@ -179,7 +140,7 @@ We have enough data for a short replication report:
 
 ---
 
-### 8. Real shadowd integrity + whitelist experiments
+### 9. Real shadowd integrity + whitelist experiments
 
 Shadow Daemon has three engines: blacklist (what we use), integrity
 (hash-based), whitelist (allow-list). The lab currently only exercises
@@ -192,7 +153,7 @@ whitelist rules from legit traffic, then running the corpus.
 
 ---
 
-### 9. Response-side fingerprinting
+### 10. Response-side fingerprinting
 
 Currently we record the WAF's response status + a snippet of the body.
 Richer fingerprinting (WAF name via `Server` header, rule IDs if

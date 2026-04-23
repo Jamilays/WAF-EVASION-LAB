@@ -111,3 +111,10 @@ export type CompareResponse = {
   b: string;
   rows: CompareRow[];
 };
+
+export type CombinedResponse = {
+  run_ids: string[];
+  waf_provenance: Record<string, string>;
+  wafs: string[];
+  rows: BypassRateRow[];
+};

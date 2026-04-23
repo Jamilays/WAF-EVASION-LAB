@@ -8,8 +8,12 @@
 ##   critical | high | medium | low
 ##   ^ strict                       ^ permissive (catches more, more FP)
 ##
-## We start at "critical" to avoid flagging benign traffic in the lab; once
-## the engine has baseline runs we can drop to "high" and compare.
+## The canonical lab default is `critical` (see README). To sweep the knob
+## for an ablation run, use `tests/openappsec_ladder.sh` /
+## `make ladder-openappsec`, which rewrites only the `minimum-confidence:`
+## line, HUPs the agent, re-runs the corpus at each level, then stitches
+## a line chart via `wafeval ladder`. The script always ends leaving this
+## file on whatever level ran last, so re-set to `critical` afterwards.
 
 policies:
   default:

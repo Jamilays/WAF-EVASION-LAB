@@ -14,8 +14,19 @@ from wafeval.models import VulnClass
 from wafeval.runner import RunConfig, run
 from wafeval.analyzer.aggregate import latest_run_id, load_run
 from wafeval.analyzer.charts import render_all as render_charts
+from wafeval.analyzer.combined import combine_runs
 from wafeval.analyzer.export import write_csvs
-from wafeval.reporter import render_latex, render_markdown
+from wafeval.analyzer.ladder import (
+    build_ladder_table,
+    render_ladder_chart,
+    render_ladder_markdown,
+)
+from wafeval.reporter import (
+    render_combined_latex,
+    render_combined_markdown,
+    render_latex,
+    render_markdown,
+)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -48,6 +59,43 @@ def _build_parser() -> argparse.ArgumentParser:
     rep.add_argument("--reports-dir", type=Path, default=Path("results/reports"))
     rep.add_argument("--anchor-target", default="dvwa",
                      help="target whose baseline triggers anchor the true-bypass table")
+
+    rc = sub.add_parser(
+        "report-combined",
+        help="Merge N runs into a single cross-run report (report-combined.md/.tex + bypass_rates.csv)",
+    )
+    rc.add_argument(
+        "--run-ids", required=True,
+        help="comma-separated run_ids to merge; later run_ids override earlier on WAF overlap",
+    )
+    rc.add_argument("--results-root", type=Path, default=Path(os.environ.get("RESULTS_ROOT", "results/raw")))
+    rc.add_argument("--processed-dir", type=Path, default=Path("results/processed"))
+    rc.add_argument("--reports-dir", type=Path, default=Path("results/reports"))
+    rc.add_argument("--out-id", default="combined",
+                    help="directory name under processed/ and reports/ where the merged outputs land")
+    rc.add_argument("--anchor-target", default="dvwa")
+
+    la = sub.add_parser(
+        "ladder",
+        help="Render an ordered-ablation line chart (e.g. open-appsec "
+             "min-confidence critical→low) from N runs.",
+    )
+    la.add_argument(
+        "--steps", required=True,
+        help="comma-separated step_label:run_id pairs; preserves order. "
+             "Example: --steps critical:run-a,high:run-b,medium:run-c,low:run-d",
+    )
+    la.add_argument("--target", default="juiceshop",
+                    help="target to anchor the ladder on (default: juiceshop — "
+                         "more informative than DVWA where rates collapse to 0%)")
+    la.add_argument("--lens", default="waf_view", choices=("true_bypass", "waf_view"))
+    la.add_argument("--results-root", type=Path, default=Path(os.environ.get("RESULTS_ROOT", "results/raw")))
+    la.add_argument("--processed-dir", type=Path, default=Path("results/processed"))
+    la.add_argument("--figures-dir", type=Path, default=Path("results/figures"))
+    la.add_argument("--reports-dir", type=Path, default=Path("results/reports"))
+    la.add_argument("--out-id", default="ladder",
+                    help="directory under processed/, figures/, reports/ for the ladder artefacts")
+    la.add_argument("--title", default="Ladder ablation")
     return p
 
 
@@ -119,6 +167,88 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  figures: {len(figures)} files under {figures_dir}")
         print(f"  report.md: {md}")
         print(f"  report.tex: {tex}")
+        return 0
+
+    if args.cmd == "report-combined":
+        run_ids = [r.strip() for r in args.run_ids.split(",") if r.strip()]
+        if not run_ids:
+            print("[report-combined] --run-ids is empty", file=sys.stderr)
+            return 2
+
+        df, provenance = combine_runs(args.results_root, run_ids)
+        if df.empty:
+            print(
+                f"[report-combined] no datapoints across run_ids={run_ids} "
+                f"under {args.results_root}",
+                file=sys.stderr,
+            )
+            return 1
+
+        processed_dir = args.processed_dir / args.out_id
+        report_dir = args.reports_dir / args.out_id
+
+        csvs = write_csvs(df, processed_dir, anchor_target=args.anchor_target)
+        md = render_combined_markdown(
+            df, provenance, report_dir / "report-combined.md",
+            run_ids=run_ids, anchor_target=args.anchor_target,
+        )
+        tex = render_combined_latex(
+            df, provenance, report_dir / "report-combined.tex",
+            run_ids=run_ids, anchor_target=args.anchor_target,
+        )
+        print(f"out_id={args.out_id}")
+        print(f"  merged run_ids: {', '.join(run_ids)}")
+        print(f"  WAFs merged:    {', '.join(sorted(provenance))}")
+        for name, path in csvs.items():
+            print(f"  csv.{name}: {path}")
+        print(f"  report-combined.md: {md}")
+        print(f"  report-combined.tex: {tex}")
+        return 0
+
+    if args.cmd == "ladder":
+        steps: list[tuple[str, str]] = []
+        for item in args.steps.split(","):
+            item = item.strip()
+            if not item:
+                continue
+            if ":" not in item:
+                print(f"[ladder] bad step {item!r}; expected label:run_id", file=sys.stderr)
+                return 2
+            label, rid = item.split(":", 1)
+            steps.append((label.strip(), rid.strip()))
+        if not steps:
+            print("[ladder] --steps is empty", file=sys.stderr)
+            return 2
+
+        table = build_ladder_table(args.results_root, steps, target=args.target, lens=args.lens)
+        if table.empty:
+            print(f"[ladder] no datapoints across steps={steps} on target={args.target}",
+                  file=sys.stderr)
+            return 1
+
+        processed_dir = args.processed_dir / args.out_id
+        figures_dir = args.figures_dir / args.out_id
+        report_dir = args.reports_dir / args.out_id
+        processed_dir.mkdir(parents=True, exist_ok=True)
+        table_csv = processed_dir / "ladder.csv"
+        table.to_csv(table_csv, index=False)
+
+        figures = render_ladder_chart(
+            table, steps, figures_dir,
+            stem="ladder", title=args.title,
+        )
+        md = render_ladder_markdown(
+            table, steps, report_dir / "report-ladder.md",
+            figures=figures, title=args.title,
+        )
+        print(f"out_id={args.out_id}")
+        print(f"  target:         {args.target}")
+        print(f"  lens:           {args.lens}")
+        print(f"  steps:          {', '.join(f'{l}:{r}' for l, r in steps)}")
+        print(f"  csv.ladder:     {table_csv}")
+        for p in figures:
+            print(f"  figure:         {p}")
+        print(f"  report-ladder.md: {md}")
         return 0
 
     return 2
