@@ -13,5 +13,6 @@ from wafeval.mutators import encoding              # noqa: F401
 from wafeval.mutators import structural            # noqa: F401
 from wafeval.mutators import context_displacement  # noqa: F401
 from wafeval.mutators import multi_request         # noqa: F401
+from wafeval.mutators import adaptive              # noqa: F401
 
 __all__ = ["REGISTRY", "Mutator", "register"]

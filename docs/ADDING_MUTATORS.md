@@ -18,7 +18,7 @@ def register(cls): REGISTRY[cls.category] = cls; return cls
 
 ## Single-request vs override-chain mutators
 
-Two shapes are supported:
+Three shapes are supported:
 
 1. **String rewrite** (lexical, encoding, structural) — leave
    `request_overrides=None` on each `MutatedPayload`. The runner substitutes
@@ -29,6 +29,16 @@ Two shapes are supported:
    `request_overrides` with one or more `RequestStep`s. The runner replays
    them in order, threading a shared cookie jar between steps, and evaluates
    the verdict against the *last* step's response.
+
+3. **Compositional** (adaptive) — build a new `Payload` via
+   `payload.model_copy(update={"payload": <variant_body>})` and re-invoke
+   another registered mutator on it. Emit the stacked output as your own
+   `MutatedPayload`s with a distinctive `variant` tag so the analyzer can
+   trace the pair. See `mutators/adaptive.py` for the canonical example —
+   it composes pairs of string-rewrite mutators, skips override-chain
+   ones (their `request_overrides` lists can't round-trip through a
+   second mutator's `payload.payload`-only interface), and optionally
+   ranks pairs via `ADAPTIVE_SEED_RUN=<run_id>` using past bypass data.
 
 `RequestStep` fields:
 
@@ -41,10 +51,13 @@ Two shapes are supported:
 - `file_fields` — `{name: (filename, content)}` multipart parts
 - `headers` — override or add any header
 
-## Steps to add a sixth category
+## Steps to add a seventh category
 
 1. Create `engine/src/wafeval/mutators/<name>.py`, subclass `Mutator`, pick
-   a unique `category` and `complexity_rank` (6+).
+   a unique `category` and `complexity_rank` (7+; the adaptive compositional
+   mutator currently holds rank 6). Update `analyzer/charts.py`'s x-axis
+   range — `range(1, N+1)` — so the complexity line chart includes your
+   rank.
 2. Decorate with `@register`. Produce **≥5 variants per input payload** —
    the Phase 4 acceptance test enforces this invariant.
 3. Import the module in `engine/src/wafeval/mutators/__init__.py` so the

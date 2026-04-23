@@ -51,6 +51,7 @@ Parked items live in [TODO.md](TODO.md).
 - **Verdict classifier** (`runner/verdict.py`): baseline-first. If baseline didn't trigger, return `BASELINE_FAIL` regardless of what the WAF did — so denominators are comparable across WAFs. 2xx response with no exploit marker → `BLOCKED` (silent-sanitise case). 5xx with exploit marker → `ALLOWED` (Juice Shop SQLITE_ERROR is a successful SQLi).
 - **Trigger model** — supports `contains`, `regex`, `reflected`, `status`, `any_of`. `any_of` lets one payload match against DVWA's "First name" *or* Juice Shop's SQLITE_ERROR so the corpus stays DRY.
 - **Context-displacement + multi_request mutators** — relocate payloads into HTTP headers. The `_header_safe()` helper percent-encodes control chars + non-ASCII so h11's field-value validation doesn't reject (SQLi `\n` payloads, Unicode-quote SQLi, etc.).
+- **Adaptive (compositional) mutator** (`mutators/adaptive.py`, `complexity_rank=6`) — stacks two string-body base mutators per variant (e.g. `encoding>url_double|lexical>alt_case_keywords`). Without a seed run it emits every ordered (A, B) pair over `{lexical, encoding, structural}`; with `ADAPTIVE_SEED_RUN=<run_id>` set, it loads that run's per-mutator bypass rates and ranks the pairs by `rate(A) × rate(B)` so the composer focuses on what actually bypassed in the seed. `ADAPTIVE_TOP_K` caps the pair count for faster iteration. Skips `context_displacement` / `multi_request` because their `request_overrides` chains don't compose through the string-only `payload.payload` interface.
 - **Request timeout** — default 30s (was 15s). DVWA cmdi's 4s ping × PHP-FPM worker queue was timing out at 15s under MAX_CONCURRENCY=10; 30s + concurrency=4 fixes it cleanly.
 - **YAML package-data** — `pyproject.toml` has `[tool.hatch.build.targets.wheel.force-include]` for every `payloads/*.yaml` and `targets.yaml`. Without this, wheel-installed package loses the corpus.
 - **⚠ Rebuild the engine image after editing `targets.yaml` or any payload YAML** — `docker compose --profile engine run --rm engine ...` uses the built image, so stale image = stale routes. Confirmed bug: the first Phase-7 run used the old image because `docker compose build engine` was kicked off concurrently with the run.
@@ -223,7 +224,7 @@ bash tests/phase5.sh   # analyzer + reporter
 bash tests/phase6.sh   # FastAPI + dashboard
 ```
 
-Engine unit tests (106 passing, post Phase-7):
+Engine unit tests (117 passing, post Phase-7):
 
 ```bash
 nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-link '<nixpkgs>' -A stdenv.cc.cc.lib)/lib:\$(nix-build --no-out-link '<nixpkgs>' -A zlib)/lib:\$LD_LIBRARY_PATH engine/.venv/bin/python -m pytest engine/tests -q"
@@ -272,6 +273,10 @@ Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice 
 
 - Per-mutator bypass rate on Juice Shop (waf_view) from the ladder run: lexical ≈ 43%, encoding ≈ 51%, structural ≈ 21%, context_displacement ≈ 20%, multi_request ≈ 56%. The ML agent holds structural / context-displacement *better* than CRS holds the same mutators (both sit ~20%), but is *more leaky* on lexical and multi-request than CRS on JSON bodies.
 - **The `minimum-confidence` ladder is flat.** Sweeping `critical → high → medium → low` moves every mutator by <1 percentage point — well inside the Wilson CIs at this N (~±4 pp). That's an empirical result, not a tooling bug: the agent's classifier appears bimodal on this corpus, so loosening the threshold doesn't reclassify payloads. The knob would only matter on genuinely ambiguous traffic, which attack-only payloads don't produce. A true ROC-shaped curve needs a benign-traffic corpus (parked in [TODO.md](TODO.md)).
+
+**Adaptive composition beats every single mutator** (smoke run `adaptive-smoke-20260423T123145Z`, seeded on `phase3-20260423T115006Z`):
+
+- ModSec v3 + CRS 4.25 on DVWA SQLi: **~40% true-bypass rate** (134 allowed / 335 eligible) when each variant stacks two base mutators. Single-category mutators against the same corpus top out at ~5% (encoding) on the same WAF. Double-URL-encoding + keyword casing (`encoding>url_double|lexical>alt_case_keywords`) is a representative winning pair — the first transform defeats CRS's decode, the second dodges the leftover signatures. Confirms the TODO's hypothesis: stacks reach where single categories can't.
 
 ---
 

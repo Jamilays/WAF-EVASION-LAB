@@ -117,7 +117,9 @@ def line_complexity(df: pd.DataFrame, out_dir: Path, target: str = "dvwa") -> li
     for (waf,), sub in rates.groupby(["waf"]):
         ax.fill_between(sub["complexity_rank"], sub["ci_lo"], sub["ci_hi"], alpha=0.10)
     ax.set_ylim(0, 1)
-    ax.set_xticks(range(1, 6))
+    # Axis covers every registered mutator's complexity_rank. The base
+    # five mutators are 1-5; the adaptive (compositional) mutator is 6.
+    ax.set_xticks(range(1, 7))
     ax.set_xlabel("complexity rank")
     ax.set_ylabel("true-bypass rate")
     ax.set_title(f"Bypass rate vs obfuscation complexity ({target})")
