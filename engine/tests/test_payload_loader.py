@@ -50,3 +50,30 @@ def test_rejects_destructive(tmp_path: Path):
 def test_missing_requested_class_raises(tmp_path: Path):
     with pytest.raises(FileNotFoundError):
         load_corpus(classes=[VulnClass.XXE], corpus_dir=tmp_path)
+
+
+# ---------- paper_subset / named-corpus (single-file) loader ----------------
+
+
+def test_paper_subset_is_20_sqli_plus_20_xss():
+    """The replication subset is a fixed point: 20 SQLi + 20 XSS exactly.
+
+    Drift here would silently invalidate the apples-to-apples vs-paper
+    comparison the subset exists for, so the test pins the count."""
+    corpus = load_corpus(corpus_name="paper_subset")
+    assert len(corpus) == 40
+    counts = {}
+    for p in corpus:
+        counts[p.vuln_class] = counts.get(p.vuln_class, 0) + 1
+    assert counts == {VulnClass.SQLI: 20, VulnClass.XSS: 20}, counts
+
+
+def test_paper_subset_filters_by_class():
+    sqli_only = load_corpus(corpus_name="paper_subset", classes=[VulnClass.SQLI])
+    assert len(sqli_only) == 20
+    assert all(p.vuln_class is VulnClass.SQLI for p in sqli_only)
+
+
+def test_named_corpus_missing_raises(tmp_path: Path):
+    with pytest.raises(FileNotFoundError):
+        load_corpus(corpus_name="does-not-exist", corpus_dir=tmp_path)

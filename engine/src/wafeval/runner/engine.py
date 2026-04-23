@@ -74,6 +74,10 @@ class RunConfig:
     request_timeout_s: float = 30.0
     results_root: Path = Path("results/raw")
     run_id: str | None = None
+    # Single-file corpus override. When set, the loader reads
+    # ``payloads/<corpus>.yaml`` verbatim instead of the per-class split.
+    # Used for the paper-replication subset.
+    corpus: str | None = None
 
 
 def _new_run_id() -> str:
@@ -332,7 +336,7 @@ async def run(cfg: RunConfig) -> str:
     log.info("run.start", run_id=run_id, mutators=cfg.mutators, classes=[c.value for c in cfg.classes])
 
     # 1. Load + filter corpus + mutators
-    corpus = load_corpus(classes=cfg.classes)
+    corpus = load_corpus(classes=cfg.classes, corpus_name=cfg.corpus)
     if not corpus:
         raise RuntimeError("empty payload corpus — nothing to run")
     tcfg = load_targets()

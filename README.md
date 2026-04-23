@@ -226,9 +226,10 @@ bash tests/phase3.sh   # engine core + lexical mutator end-to-end
 bash tests/phase4.sh   # 5 mutators × corpus minima
 bash tests/phase5.sh   # analyzer + reporter
 bash tests/phase6.sh   # FastAPI + dashboard
+bash tests/phase_paper.sh  # --corpus paper_subset + encoding≥lexical invariant
 ```
 
-Engine unit tests (126 passing, post Phase-7):
+Engine unit tests (129 passing, post Phase-7):
 
 ```bash
 nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-link '<nixpkgs>' -A stdenv.cc.cc.lib)/lib:\$(nix-build --no-out-link '<nixpkgs>' -A zlib)/lib:\$LD_LIBRARY_PATH engine/.venv/bin/python -m pytest engine/tests -q"
@@ -255,6 +256,8 @@ nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-
 | **graphql** | **10** | Introspection + batch + alias + fragment cycle |
 | **crlf** | **10** | Response splitting + Set-Cookie smuggle + LF-only |
 | **benign** | **15** | Realistic product searches + usernames + natural-English "near-signal" (apostrophes, nested quotes, SQL-keyword phrases). Paired with the `noop` mutator for clean FPR measurement; excluded from default runs (load via `--classes benign`). |
+
+Also shipped as a single-file **paper-replication subset** — 20 SQLi + 20 XSS in `payloads/paper_subset.yaml`, drawn from the same academic literature (PayloadsAllTheThings, OWASP WSTG, SecLists) that Yusifova (2024) cited. Not paper-verbatim (the thesis' exact payload list isn't bundled here) but sized + split to match. Load with `wafeval run --corpus paper_subset`; `tests/phase_paper.sh` is the dedicated acceptance script. The subset is a fixed point — drifting `sqli.yaml` / `xss.yaml` won't change these 40 entries, so reproduction numbers stay comparable over time.
 
 Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice Shop ("SQLITE_ERROR"). WAF-view-only classes use `TriggerStatus: 200` — the endpoint always 200s, so the WAF's decision drives the verdict. Benign entries use the same `status: 200` pattern since "baseline returned 200" simply means the backend handled the realistic request.
 

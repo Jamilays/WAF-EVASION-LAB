@@ -45,6 +45,12 @@ def _build_parser() -> argparse.ArgumentParser:
         "--classes", default="sqli,xss",
         help="comma-separated vuln classes to load from the corpus",
     )
+    r.add_argument(
+        "--corpus", default=None,
+        help="named corpus file to load verbatim from engine/src/wafeval/payloads/<name>.yaml "
+             "(e.g. --corpus paper_subset). When set, the per-class split is bypassed; "
+             "--classes still filters inside the single file. Default: load the per-class YAMLs.",
+    )
     r.add_argument("--wafs", default=None, help="comma-separated WAFs (default: all)")
     r.add_argument("--targets", default=None, help="comma-separated targets (default: all)")
     r.add_argument("--max-concurrency", type=int, default=int(os.environ.get("MAX_CONCURRENCY", "10")))
@@ -137,6 +143,7 @@ def main(argv: list[str] | None = None) -> int:
             request_timeout_s=args.timeout,
             results_root=args.results_root,
             run_id=args.run_id,
+            corpus=args.corpus,
         )
         run_id = anyio.run(run, cfg)
         print(f"run_id={run_id} results={args.results_root / run_id}")
