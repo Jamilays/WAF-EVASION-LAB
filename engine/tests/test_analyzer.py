@@ -85,6 +85,38 @@ def test_waf_view_excludes_baseline_fail_and_error():
     assert r["n"] == 2 and r["k"] == 1   # allowed counts; blocked doesn't
 
 
+def test_blocked_silent_is_waf_win_in_true_bypass_lens():
+    """blocked_silent must count in the denominator (WAF win, not a bypass).
+
+    Three datapoints: one bypass, one hard block, one silent sanitise →
+    rate = 1 / 3, not 1 / 2 (which would happen if blocked_silent were
+    swept into baseline_fail / ignored).
+    """
+    df = pd.DataFrame([
+        _row("modsec", "lexical", "allowed"),
+        _row("modsec", "lexical", "blocked"),
+        _row("modsec", "lexical", "blocked_silent"),
+    ])
+    r = compute_rates(df, ["waf", "mutator"], lens="true_bypass").iloc[0]
+    assert r["k"] == 1 and r["n"] == 3
+    assert abs(r["rate"] - 1.0 / 3) < 1e-12
+
+
+def test_blocked_silent_subtracts_from_waf_view_numerator():
+    """waf_view: denom counts everything that tested the WAF; num excludes
+    both hard blocks and silent sanitises."""
+    df = pd.DataFrame([
+        _row("modsec", "lexical", "allowed"),
+        _row("modsec", "lexical", "blocked"),
+        _row("modsec", "lexical", "blocked_silent"),
+        _row("modsec", "lexical", "baseline_fail"),  # excluded from denom
+    ])
+    r = compute_rates(df, ["waf", "mutator"], lens="waf_view").iloc[0]
+    # denom = 4 - 0 (error) - 1 (baseline_fail) = 3
+    # num   = 3 - 1 (blocked) - 1 (blocked_silent) = 1
+    assert r["n"] == 3 and r["k"] == 1
+
+
 def test_compute_rates_empty_input_shape():
     r = compute_rates(pd.DataFrame(), ["waf", "mutator"], lens="true_bypass")
     assert list(r.columns) == ["waf", "mutator", "k", "n", "rate", "ci_lo", "ci_hi", "lens"]

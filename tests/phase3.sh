@@ -66,17 +66,20 @@ for waf in baseline modsec coraza shadowd; do
   pass "$waf × dvwa → $count records"
 done
 
-# At least one 'blocked' from modsec-dvwa — matches Phase 2's canonical 403.
+# At least one WAF win from modsec-dvwa — matches Phase 2's canonical 403 OR
+# a silent sanitise (200 with the payload stripped). Accepting both keeps the
+# acceptance check robust to CRS rule updates that switch from hard-deny to
+# rewrite on e.g. JSON-SQL detection.
 blocked=$("$PY" -c "
-import json, pathlib, sys
+import json, pathlib
 n = sum(
     1 for p in pathlib.Path('$OUT/modsec/dvwa').glob('*.json')
-    if json.loads(p.read_text()).get('verdict') == 'blocked'
+    if json.loads(p.read_text()).get('verdict') in ('blocked', 'blocked_silent')
 )
 print(n)
 ")
-[[ "$blocked" -ge 1 ]] || fail "no 'blocked' verdicts from modsec-dvwa — WAF engagement broken?"
-pass "modsec-dvwa blocked $blocked variants (≥1 required)"
+[[ "$blocked" -ge 1 ]] || fail "no 'blocked' or 'blocked_silent' verdicts from modsec-dvwa — WAF engagement broken?"
+pass "modsec-dvwa blocked $blocked variants (≥1 required, hard-block or silent)"
 
 step "7/7  Manifest totals match filesystem"
 manifest_total=$("$PY" -c "

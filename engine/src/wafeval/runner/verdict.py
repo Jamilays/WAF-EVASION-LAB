@@ -134,8 +134,12 @@ def classify(
                 return Verdict.FLAGGED
             return Verdict.ALLOWED
         # WAF responded 2xx but stripped the payload (no marker) → silent block.
+        # Distinct verdict from a hard 403: the client wouldn't know the WAF
+        # intervened without comparing to the baseline response. Paper-grade
+        # analysis cares about this — some WAFs only sanitise, never block,
+        # and that's a different threat model from "returns 403 with banner".
         if 200 <= code < 300:
-            return Verdict.BLOCKED
+            return Verdict.BLOCKED_SILENT
         # Non-block 5xx without the marker → app blew up for unrelated reasons;
         # don't claim a bypass we can't prove.
         return Verdict.BASELINE_FAIL

@@ -82,15 +82,17 @@ def test_302_redirect_is_baseline_fail_not_allowed(payload):
     assert classify(payload, baseline, waf) is Verdict.BASELINE_FAIL
 
 
-def test_waf_2xx_without_marker_is_blocked(payload):
+def test_waf_2xx_without_marker_is_blocked_silent(payload):
     """WAF returned 200 but the trigger marker is absent — payload stripped/transformed.
 
-    This is the "silent" block pattern — open-appsec, Cloudflare Ruleset
-    Engine, etc. sometimes pass the request but sanitise the query.
+    Silent sanitise pattern: open-appsec, Cloudflare Ruleset Engine, and
+    modern CRS plugins sometimes pass the request but rewrite the query so
+    the exploit never lands. Distinct verdict from ``BLOCKED`` (hard 403)
+    because from the client's perspective the WAF is invisible.
     """
     baseline = _rr("baseline-dvwa.local", 200, "First name: admin")
     waf = _rr("coraza-dvwa.local", 200, "ID: 1<br/>no rows returned")
-    assert classify(payload, baseline, waf) is Verdict.BLOCKED
+    assert classify(payload, baseline, waf) is Verdict.BLOCKED_SILENT
 
 
 def test_flagged_on_block_marker_in_2xx(payload):

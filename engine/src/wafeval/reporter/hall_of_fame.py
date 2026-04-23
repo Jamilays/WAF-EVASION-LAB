@@ -34,7 +34,7 @@ def hall_of_fame(df: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
     # Only count a (variant × waf × target) cell if the baseline actually
     # fired — otherwise "allowed" is baseline_fail disguised.
     eligible = non_baseline[non_baseline["verdict"].isin(
-        ["allowed", "blocked", "flagged"]
+        ["allowed", "blocked", "blocked_silent", "flagged"]
     )]
 
     if eligible.empty:

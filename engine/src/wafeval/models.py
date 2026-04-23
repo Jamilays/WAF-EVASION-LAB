@@ -177,11 +177,15 @@ class MutatedPayload(BaseModel):
 
 
 class Verdict(StrEnum):
-    BLOCKED = "blocked"             # WAF returned 4xx or 5xx that matches a block signature
-    ALLOWED = "allowed"             # 2xx response, baseline triggered → real bypass
-    FLAGGED = "flagged"             # 2xx response, but WAF log/header indicates detection
-    BASELINE_FAIL = "baseline_fail" # baseline didn't trigger → can't claim bypass
-    ERROR = "error"                 # network / timeout / protocol failure
+    BLOCKED = "blocked"                # WAF returned 4xx or 5xx that matches a block signature
+    BLOCKED_SILENT = "blocked_silent"  # WAF passed the request through but the response
+                                       # carries no exploit marker — silent sanitise (stripped
+                                       # script tag, dropped quotes, etc.). Counts as a WAF win
+                                       # but is distinct from a hard block for paper analysis.
+    ALLOWED = "allowed"                # 2xx response, baseline triggered → real bypass
+    FLAGGED = "flagged"                # 2xx response, but WAF log/header indicates detection
+    BASELINE_FAIL = "baseline_fail"    # baseline didn't trigger → can't claim bypass
+    ERROR = "error"                    # network / timeout / protocol failure
 
 
 class RouteResult(BaseModel):

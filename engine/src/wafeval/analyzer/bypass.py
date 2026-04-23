@@ -46,17 +46,26 @@ def wilson_ci(k: int, n: int, z: float = _Z_95) -> tuple[float, float, float]:
 
 
 def _num_denom(df: pd.DataFrame, lens: Lens) -> tuple[int, int]:
-    """Return (numerator, denominator) for the bypass-rate definition."""
+    """Return (numerator, denominator) for the bypass-rate definition.
+
+    ``blocked_silent`` (WAF let the request through but the response carries
+    no exploit marker — silent sanitise) is treated as a WAF win in both
+    lenses: it lands in the denominator alongside ``blocked`` but never in
+    the numerator. It's a *different kind* of win (rule-level rewrite vs
+    hard-deny), surfaced separately in the per-payload CSV and the dashboard
+    heatmap; the headline rate stays on what the paper cares about.
+    """
     verdicts = df["verdict"]
     if lens == "true_bypass":
         allowed = int((verdicts == "allowed").sum())
         blocked = int((verdicts == "blocked").sum())
+        blocked_silent = int((verdicts == "blocked_silent").sum())
         flagged = int((verdicts == "flagged").sum())
-        # Paper's headline ratio: allowed over (allowed + blocked + flagged).
-        # Flagged stays in the denominator because the WAF did detect the
-        # request even if it forwarded — the "bypass" meant slipping a
-        # payload past the WAF undetected.
-        denom = allowed + blocked + flagged
+        # Paper's headline ratio: allowed over (allowed + blocked +
+        # blocked_silent + flagged). Flagged stays in the denominator
+        # because the WAF did detect the request even if it forwarded — the
+        # "bypass" meant slipping a payload past the WAF undetected.
+        denom = allowed + blocked + blocked_silent + flagged
         return allowed, denom
     # waf_view — baseline-agnostic, but we still drop datapoints where no
     # bypass attempt was possible. Excluding baseline_fail + error makes the
@@ -65,10 +74,11 @@ def _num_denom(df: pd.DataFrame, lens: Lens) -> tuple[int, int]:
     # baselines (Juice Shop XSS pre-fix, DVWA SSTI endpoint) reported
     # rate=1.0 because "not blocked" swept in every baseline-fail too.
     blocked = int((verdicts == "blocked").sum())
+    blocked_silent = int((verdicts == "blocked_silent").sum())
     error = int((verdicts == "error").sum())
     baseline_fail = int((verdicts == "baseline_fail").sum())
     denom = len(df) - error - baseline_fail
-    num = max(0, denom - blocked)
+    num = max(0, denom - blocked - blocked_silent)
     return num, denom
 
 

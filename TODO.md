@@ -5,26 +5,9 @@ in rough priority order (top = most valuable-per-hour, bottom = largest).
 
 ---
 
-## Near-term (half-day each)
-
-### 1. Split `allowed_with_marker` vs `allowed_sanitized`
-
-Current verdict `ALLOWED` lumps together:
-- WAF passed the request, payload triggered at the sink (real bypass), AND
-- WAF passed the request, but the response didn't carry the expected marker
-  (silent transform — e.g. removed `<script>`, stripped quotes).
-
-**What's needed:**
-- Bundle 2's classifier already has the logic (checks WAF-side marker),
-  but emits `BLOCKED` for the sanitized case. Split into new verdict
-  `BLOCKED_SILENT` so the analyzer can show this as a third category.
-- Dashboard heatmap: three colours (block / silent-block / bypass).
-
----
-
 ## Medium-term (1–2 days each)
 
-### 2. Adaptive / genetic mutator
+### 1. Adaptive / genetic mutator
 
 Current mutators emit fixed variants. An `adaptive.py` mutator would:
 - Observe which transforms bypass per WAF
@@ -39,7 +22,7 @@ paper-grade "WAFs can't keep up with evolving attackers" material.
 
 ---
 
-### 3. Paranoia-level ablation on all 4 WAFs
+### 2. Paranoia-level ablation on all 4 WAFs
 
 We already have `--profile paranoia-high` and a PL1 vs PL4 comparison. The
 natural extension: PL1 / PL2 / PL3 / PL4 ablation with same corpus,
@@ -54,7 +37,7 @@ present the trade-off as a Pareto curve.
 
 ---
 
-### 4. Commercial WAF comparison
+### 3. Commercial WAF comparison
 
 The comparison every reviewer asks for: AWS WAF, Cloudflare managed rules,
 Azure WAF. Needs cloud accounts + paid-tier rulesets.
@@ -70,7 +53,7 @@ companion paper.
 
 ---
 
-### 5. Benign-traffic corpus for true FPR / ROC curves
+### 4. Benign-traffic corpus for true FPR / ROC curves
 
 The open-appsec confidence-ladder ablation came out flat (bypass rate
 ≈constant across `critical → high → medium → low`) because every payload
@@ -93,7 +76,7 @@ the raw record format.
 
 ---
 
-### 6. Replicate the original 40-payload subset
+### 5. Replicate the original 40-payload subset
 
 The paper used 20 SQLi + 20 XSS, specific entries. Running JUST those in
 our engine (ignoring the 161 we added) gives an apples-to-apples
@@ -109,7 +92,7 @@ reproduction number for the Discussion section.
 
 ## Long-term / aspirational
 
-### 7. Publish replication paper
+### 6. Publish replication paper
 
 We have enough data for a short replication report:
 - Abstract + Intro can cite our numbers vs the paper's
@@ -121,7 +104,7 @@ We have enough data for a short replication report:
 
 ---
 
-### 8. Real shadowd integrity + whitelist experiments
+### 7. Real shadowd integrity + whitelist experiments
 
 Shadow Daemon has three engines: blacklist (what we use), integrity
 (hash-based), whitelist (allow-list). The lab currently only exercises
@@ -134,7 +117,7 @@ whitelist rules from legit traffic, then running the corpus.
 
 ---
 
-### 9. Response-side fingerprinting
+### 8. Response-side fingerprinting
 
 Currently we record the WAF's response status + a snippet of the body.
 Richer fingerprinting (WAF name via `Server` header, rule IDs if

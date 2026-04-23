@@ -61,6 +61,7 @@ Parked items live in [TODO.md](TODO.md).
 - `waf_view` denominator excludes `baseline_fail + error` (it's "requests that actually tested the WAF", not "everything on disk").
 - Reporter renders `—` for cells where `n < 5` (Wilson CI > ±0.4 at that size is misleading).
 - Hall of Fame section (`reporter/hall_of_fame.py`) lists top-N variants by how many (waf × target) cells they bypass.
+- **Three-way verdict split** (post-Phase-7): `BLOCKED` covers hard-deny signatures (403/406/501 or 5xx + WAF body marker); `BLOCKED_SILENT` covers the silent-sanitise case (2xx response, but the exploit marker that fired on baseline is absent — e.g. CRS's JSON-SQL rewrite or open-appsec's quiet strip); `ALLOWED` is the real bypass. Both block verdicts count as WAF wins in the denominator and never in the numerator; `per_payload.csv` / `/runs/{id}/per-payload` emit a separate `n_blocked_silent` tally, the dashboard VerdictBadge renders it teal, and the Hall of Fame includes silent blocks when computing the (waf × target) eligibility denominator.
 
 ### API / Dashboard (`--profile dashboard`)
 
@@ -222,7 +223,7 @@ bash tests/phase5.sh   # analyzer + reporter
 bash tests/phase6.sh   # FastAPI + dashboard
 ```
 
-Engine unit tests (104 passing, post Phase-7):
+Engine unit tests (106 passing, post Phase-7):
 
 ```bash
 nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-link '<nixpkgs>' -A stdenv.cc.cc.lib)/lib:\$(nix-build --no-out-link '<nixpkgs>' -A zlib)/lib:\$LD_LIBRARY_PATH engine/.venv/bin/python -m pytest engine/tests -q"

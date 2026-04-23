@@ -226,6 +226,7 @@ def render_markdown(
 - Verdict tallies:
   - allowed: {totals.get("allowed", 0)}
   - blocked: {totals.get("blocked", 0)}
+  - blocked_silent: {totals.get("blocked_silent", 0)}
   - flagged: {totals.get("flagged", 0)}
   - baseline_fail: {totals.get("baseline_fail", 0)}
   - error: {totals.get("error", 0)}

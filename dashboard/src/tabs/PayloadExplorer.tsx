@@ -3,7 +3,7 @@ import { api } from "../api";
 import type { RecordDetail, VariantRow } from "../types";
 import VerdictBadge from "../components/VerdictBadge";
 
-const VERDICTS = ["", "allowed", "blocked", "flagged", "baseline_fail", "error"];
+const VERDICTS = ["", "allowed", "blocked", "blocked_silent", "flagged", "baseline_fail", "error"];
 
 // Every vuln_class the engine currently ships. Keeping them in one place
 // here means a user can pick "nosql" from the dropdown instead of typing,

@@ -202,6 +202,7 @@ def run_per_payload(raw_root: Path, run_id: str) -> list[dict[str, Any]]:
         df.assign(
             n_allowed=(df["verdict"] == "allowed").astype(int),
             n_blocked=(df["verdict"] == "blocked").astype(int),
+            n_blocked_silent=(df["verdict"] == "blocked_silent").astype(int),
             n_flagged=(df["verdict"] == "flagged").astype(int),
             n_baseline_fail=(df["verdict"] == "baseline_fail").astype(int),
             n_error=(df["verdict"] == "error").astype(int),
@@ -209,7 +210,7 @@ def run_per_payload(raw_root: Path, run_id: str) -> list[dict[str, Any]]:
         .groupby(["payload_id", "vuln_class", "waf", "target"], as_index=False)
         .agg({
             "variant": "count",
-            "n_allowed": "sum", "n_blocked": "sum",
+            "n_allowed": "sum", "n_blocked": "sum", "n_blocked_silent": "sum",
             "n_flagged": "sum", "n_baseline_fail": "sum", "n_error": "sum",
         })
         .rename(columns={"variant": "n_total"})
