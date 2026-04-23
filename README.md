@@ -32,7 +32,7 @@ Parked items live in [TODO.md](TODO.md).
 
 | WAF | How it blocks | Gotchas |
 |---|---|---|
-| **ModSecurity v3 + CRS 4.25** (`owasp/modsecurity-crs:4.25.0-nginx-alpine-202604040104`) | Libinjection + ~1000 CRS rules. `PARANOIA` env var tunes the PL. | `PARANOIA=4` in compose env for `modsec-ph-*` services **doesn't activate the JSON-SQL plugin rules** (942550 family) — those ship separately. So modsec-ph shows the SAME bypass rate as modsec on JSON-SQL payloads. |
+| **ModSecurity v3 + CRS 4.25** (`owasp/modsecurity-crs:4.25.0-nginx-alpine-202604040104`) | Libinjection + ~1000 CRS rules. `PARANOIA` env var tunes the PL. | `PARANOIA=N` in compose env for `modsec-ph-*` services **doesn't activate the JSON-SQL plugin rules** (942550 family) — those ship separately. So modsec-ph shows the SAME bypass rate as modsec on JSON-SQL payloads at every PL. The paranoia-ladder ablation (see Research findings) measures this: bypass rate stays **flat across PL1/2/3/4**, while Coraza (which flips the same knob via `setvar:tx.blocking_paranoia_level=N`) closes the gap from PL2 onwards. |
 | **Coraza** (`waflab/coraza:phase1`, built from `corazawaf/coraza/v3`) | Same CRS 4.25 rule set loaded via `coreruleset.FS`. | **CRITICAL:** `@coraza.conf-recommended` defaults to `SecRuleEngine DetectionOnly` — blocks nothing. We force `SecRuleEngine On` via `CORAZA_BLOCKING_MODE=on` (default). PL4 directive in compose (`SecAction ... tx.blocking_paranoia_level=4`) **does** activate JSON-SQL rules (unlike modsec-ph). |
 | **Shadow Daemon** (`zecure/shadowd:2.2.0`) | TCP :9115 analyser + 120 blacklist filters; verdict over HMAC-signed wire protocol. | Requires DB profile bootstrap. `MODE_ACTIVE=1`, `MODE_PASSIVE=2`, `MODE_LEARNING=3` — **lower number = stricter** (counterintuitive). `server_ip` column stored as `*` which `prepare_wildcard()` converts to SQL `%`; storing literal `%` gets escaped to `\%` and matches nothing. The proxy (`waflab/shadowd-proxy`) speaks the real wire protocol `profile_id\n hmac\n json\n`. 120-filter library is weaker than CRS — expected higher bypass rate. `SHADOWD_FALLBACK_BLOCK=false` by default (was a regex safety net before the daemon was properly wired). |
 | **open-appsec** (`ghcr.io/openappsec/agent-unified:latest`) | NGINX + ML attachment in one container, multiplexing all 3 `openappsec-*.local` Host headers via server blocks. | Standalone profile requires 4 sidecars: `openappsec-smartsync`, `openappsec-shared-storage`, `openappsec-tuning`, `openappsec-db` (Postgres **16**, not 18 — 18 moved the data dir). `local_policy.yaml` in `wafs/openappsec/localconfig/` sets `prevent-learn` + `minimum-confidence: critical`. Healthcheck probes `/healthz` which the nginx default_server handles *before* the agent attachment (agent takes 30-45 s to load policy). |
@@ -48,7 +48,7 @@ Parked items live in [TODO.md](TODO.md).
 ### Engine (Python, `engine/src/wafeval/`)
 
 - **Per-route `httpx.AsyncClient`** — one client per (waf, target) route to avoid cookie jar leaks between routes. The old shared jar made DVWA session appear to work on WAF routes when actually only baseline authenticated.
-- **Verdict classifier** (`runner/verdict.py`): baseline-first. If baseline didn't trigger, return `BASELINE_FAIL` regardless of what the WAF did — so denominators are comparable across WAFs. 2xx response with no exploit marker → `BLOCKED` (silent-sanitise case). 5xx with exploit marker → `ALLOWED` (Juice Shop SQLITE_ERROR is a successful SQLi).
+- **Verdict classifier** (`runner/verdict.py`): baseline-first. If baseline didn't trigger, return `BASELINE_FAIL` regardless of what the WAF did — so denominators are comparable across WAFs. Hard 4xx/5xx+WAF-marker → `BLOCKED`; 2xx response with no exploit marker → `BLOCKED_SILENT` (silent-sanitise case, see Analyzer section for how it's surfaced); 5xx with exploit marker → `ALLOWED` (Juice Shop SQLITE_ERROR is a successful SQLi); 2xx with the marker → `ALLOWED` (or `FLAGGED` when the WAF stamped a detection header).
 - **Trigger model** — supports `contains`, `regex`, `reflected`, `status`, `any_of`. `any_of` lets one payload match against DVWA's "First name" *or* Juice Shop's SQLITE_ERROR so the corpus stays DRY.
 - **Context-displacement + multi_request mutators** — relocate payloads into HTTP headers. The `_header_safe()` helper percent-encodes control chars + non-ASCII so h11's field-value validation doesn't reject (SQLi `\n` payloads, Unicode-quote SQLi, etc.).
 - **Adaptive (compositional) mutator** (`mutators/adaptive.py`, `complexity_rank=6`) — stacks two string-body base mutators per variant (e.g. `encoding>url_double|lexical>alt_case_keywords`). Without a seed run it emits every ordered (A, B) pair over `{lexical, encoding, structural}`; with `ADAPTIVE_SEED_RUN=<run_id>` set, it loads that run's per-mutator bypass rates and ranks the pairs by `rate(A) × rate(B)` so the composer focuses on what actually bypassed in the seed. `ADAPTIVE_TOP_K` caps the pair count for faster iteration. Skips `context_displacement` / `multi_request` because their `request_overrides` chains don't compose through the string-only `payload.payload` interface.
@@ -154,7 +154,7 @@ docker compose --profile dashboard up -d --build --wait  # + api (FastAPI) + das
 
 With `--profile dashboard`:
 
-- **Dashboard** — http://127.0.0.1:3000 — tabs: Live Run, Results, Hall of Fame, Payload Explorer, Compare Runs.
+- **Dashboard** — http://127.0.0.1:3000 — tabs: Live Run, Results, Cross-WAF, Hall of Fame, Payload Explorer, Compare Runs.
 - **API** — http://127.0.0.1:8001 — `/docs` for live OpenAPI.
 
 Both mount `results/` read-only. Trigger a run with `make run` and watch the Live Run tab poll it.
@@ -183,7 +183,8 @@ All three targets have engine endpoints — the paper's 4 WAFs × 3 targets matr
 ## Running experiments
 
 ```bash
-# Full 201-payload corpus × 5 mutators × 2 targets × 4 WAFs (PL1) — ~20 min at MAX_CONCURRENCY=4
+# Full 201-payload corpus × 5 mutators × 3 targets × 4 WAFs (PL1) — ~30 min at MAX_CONCURRENCY=4
+# (post-WebGoat-restore: budget is higher than the pre-phase-7-close 2-target runs)
 docker compose --profile engine run --rm -e MAX_CONCURRENCY=4 --name waflab-engine \
   engine run \
   --classes sqli,xss,cmdi,lfi,ssti,xxe,nosql,ldap,ssrf,jndi,graphql,crlf \
