@@ -17,6 +17,7 @@ from wafeval.analyzer.charts import render_all as render_charts
 from wafeval.analyzer.combined import combine_runs
 from wafeval.analyzer.export import write_csvs
 from wafeval.analyzer.ladder import (
+    build_fpr_table,
     build_ladder_table,
     render_ladder_chart,
     render_ladder_markdown,
@@ -96,6 +97,12 @@ def _build_parser() -> argparse.ArgumentParser:
     la.add_argument("--out-id", default="ladder",
                     help="directory under processed/, figures/, reports/ for the ladder artefacts")
     la.add_argument("--title", default="Ladder ablation")
+    la.add_argument(
+        "--fpr-steps", default=None,
+        help="optional benign-corpus counterparts keyed on the same step labels, "
+             "e.g. --fpr-steps pl1:bench-run-a,pl2:bench-run-b. Produces a second "
+             "FPR table + dashed overlay lines on the chart.",
+    )
     return p
 
 
@@ -206,19 +213,34 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == "ladder":
-        steps: list[tuple[str, str]] = []
-        for item in args.steps.split(","):
-            item = item.strip()
-            if not item:
-                continue
-            if ":" not in item:
-                print(f"[ladder] bad step {item!r}; expected label:run_id", file=sys.stderr)
-                return 2
-            label, rid = item.split(":", 1)
-            steps.append((label.strip(), rid.strip()))
+        def _parse_steps(arg: str, flag_name: str) -> list[tuple[str, str]]:
+            out: list[tuple[str, str]] = []
+            for item in arg.split(","):
+                item = item.strip()
+                if not item:
+                    continue
+                if ":" not in item:
+                    print(f"[ladder] bad {flag_name} {item!r}; expected label:run_id",
+                          file=sys.stderr)
+                    raise ValueError(item)
+                label, rid = item.split(":", 1)
+                out.append((label.strip(), rid.strip()))
+            return out
+
+        try:
+            steps = _parse_steps(args.steps, "--steps")
+        except ValueError:
+            return 2
         if not steps:
             print("[ladder] --steps is empty", file=sys.stderr)
             return 2
+
+        fpr_steps: list[tuple[str, str]] | None = None
+        if getattr(args, "fpr_steps", None):
+            try:
+                fpr_steps = _parse_steps(args.fpr_steps, "--fpr-steps") or None
+            except ValueError:
+                return 2
 
         table = build_ladder_table(args.results_root, steps, target=args.target, lens=args.lens)
         if table.empty:
@@ -226,26 +248,45 @@ def main(argv: list[str] | None = None) -> int:
                   file=sys.stderr)
             return 1
 
+        fpr_table = None
+        if fpr_steps is not None:
+            fpr_table = build_fpr_table(args.results_root, fpr_steps, target=args.target)
+            if fpr_table.empty:
+                print(
+                    f"[ladder] --fpr-steps supplied but benign corpus produced no rows on "
+                    f"target={args.target}; check the fpr run_ids include `class=benign` records",
+                    file=sys.stderr,
+                )
+                fpr_table = None
+
         processed_dir = args.processed_dir / args.out_id
         figures_dir = args.figures_dir / args.out_id
         report_dir = args.reports_dir / args.out_id
         processed_dir.mkdir(parents=True, exist_ok=True)
         table_csv = processed_dir / "ladder.csv"
         table.to_csv(table_csv, index=False)
+        if fpr_table is not None:
+            (processed_dir / "ladder-fpr.csv").write_text(fpr_table.to_csv(index=False))
 
         figures = render_ladder_chart(
             table, steps, figures_dir,
             stem="ladder", title=args.title,
+            fpr_table=fpr_table,
         )
         md = render_ladder_markdown(
             table, steps, report_dir / "report-ladder.md",
             figures=figures, title=args.title,
+            fpr_table=fpr_table, fpr_steps=fpr_steps,
         )
         print(f"out_id={args.out_id}")
         print(f"  target:         {args.target}")
         print(f"  lens:           {args.lens}")
         print(f"  steps:          {', '.join(f'{l}:{r}' for l, r in steps)}")
+        if fpr_steps:
+            print(f"  fpr_steps:      {', '.join(f'{l}:{r}' for l, r in fpr_steps)}")
         print(f"  csv.ladder:     {table_csv}")
+        if fpr_table is not None:
+            print(f"  csv.ladder-fpr: {processed_dir / 'ladder-fpr.csv'}")
         for p in figures:
             print(f"  figure:         {p}")
         print(f"  report-ladder.md: {md}")

@@ -7,30 +7,7 @@ in rough priority order (top = most valuable-per-hour, bottom = largest).
 
 ## Medium-term (1–2 days each)
 
-### 1. Benign-traffic corpus for true FPR / ROC curves
-
-The open-appsec confidence-ladder ablation came out flat (bypass rate
-≈constant across `critical → high → medium → low`) because every payload
-in the current corpus is an attack. To measure the real trade-off — each
-level's bypass rate *against its false-positive rate* — we need a benign
-payload source.
-
-**What's needed:**
-- A second YAML corpus under `engine/src/wafeval/payloads/` holding benign
-  traffic shaped like the real sinks (login form posts, product search
-  terms, path components, typical JSON API bodies)
-- Engine wiring so a run can operate over "benign" mode (same routes,
-  verdict flipped: `ALLOWED` is success, `BLOCKED` is a false positive)
-- `wafeval ladder --fpr-run <benign-run-id>` second axis so the line
-  chart becomes bypass-rate (from attacks) vs FPR (from benign). With
-  this, the open-appsec ladder should produce a recognisable ROC shape.
-
-Cleanly pluggable into the existing aggregator — no schema changes to
-the raw record format.
-
----
-
-### 2. Replicate the original 40-payload subset
+### 1. Replicate the original 40-payload subset
 
 The paper used 20 SQLi + 20 XSS, specific entries. Running JUST those in
 our engine (ignoring the 161 we added) gives an apples-to-apples
@@ -46,7 +23,7 @@ reproduction number for the Discussion section.
 
 ## Long-term / aspirational
 
-### 3. Publish replication paper
+### 2. Publish replication paper
 
 We have enough data for a short replication report:
 - Abstract + Intro can cite our numbers vs the paper's
@@ -58,7 +35,7 @@ We have enough data for a short replication report:
 
 ---
 
-### 4. Real shadowd integrity + whitelist experiments
+### 3. Real shadowd integrity + whitelist experiments
 
 Shadow Daemon has three engines: blacklist (what we use), integrity
 (hash-based), whitelist (allow-list). The lab currently only exercises
@@ -71,7 +48,7 @@ whitelist rules from legit traffic, then running the corpus.
 
 ---
 
-### 5. Response-side fingerprinting
+### 4. Response-side fingerprinting
 
 Currently we record the WAF's response status + a snippet of the body.
 Richer fingerprinting (WAF name via `Server` header, rule IDs if

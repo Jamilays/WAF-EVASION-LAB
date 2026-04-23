@@ -52,6 +52,7 @@ Parked items live in [TODO.md](TODO.md).
 - **Trigger model** — supports `contains`, `regex`, `reflected`, `status`, `any_of`. `any_of` lets one payload match against DVWA's "First name" *or* Juice Shop's SQLITE_ERROR so the corpus stays DRY.
 - **Context-displacement + multi_request mutators** — relocate payloads into HTTP headers. The `_header_safe()` helper percent-encodes control chars + non-ASCII so h11's field-value validation doesn't reject (SQLi `\n` payloads, Unicode-quote SQLi, etc.).
 - **Adaptive (compositional) mutator** (`mutators/adaptive.py`, `complexity_rank=6`) — stacks two string-body base mutators per variant (e.g. `encoding>url_double|lexical>alt_case_keywords`). Without a seed run it emits every ordered (A, B) pair over `{lexical, encoding, structural}`; with `ADAPTIVE_SEED_RUN=<run_id>` set, it loads that run's per-mutator bypass rates and ranks the pairs by `rate(A) × rate(B)` so the composer focuses on what actually bypassed in the seed. `ADAPTIVE_TOP_K` caps the pair count for faster iteration. Skips `context_displacement` / `multi_request` because their `request_overrides` chains don't compose through the string-only `payload.payload` interface.
+- **Noop (identity) mutator** (`mutators/noop.py`, `complexity_rank=0`) — emits the payload byte-identical to the YAML. Purpose-built for the benign-corpus FPR workflow: a real user doesn't send `ApPlE jUiCE` to a search box, so case-permuted or encoded benign bodies would conflate "WAF over-blocks realistic traffic" with "WAF over-blocks semi-scrambled traffic". Pair with `--classes benign --mutators noop` for the clean FPR sweep; the ladder CLI's `--fpr-steps` consumes runs produced this way (see Ladder section).
 - **Request timeout** — default 30s (was 15s). DVWA cmdi's 4s ping × PHP-FPM worker queue was timing out at 15s under MAX_CONCURRENCY=10; 30s + concurrency=4 fixes it cleanly.
 - **YAML package-data** — `pyproject.toml` has `[tool.hatch.build.targets.wheel.force-include]` for every `payloads/*.yaml` and `targets.yaml`. Without this, wheel-installed package loses the corpus.
 - **⚠ Rebuild the engine image after editing `targets.yaml` or any payload YAML** — `docker compose --profile engine run --rm engine ...` uses the built image, so stale image = stale routes. Confirmed bug: the first Phase-7 run used the old image because `docker compose build engine` was kicked off concurrently with the run.
@@ -86,6 +87,7 @@ Parked items live in [TODO.md](TODO.md).
 - For open-appsec specifically, [tests/openappsec_ladder.sh](tests/openappsec_ladder.sh) (`make ladder-openappsec`) automates the full `critical → high → medium → low` sweep: rewrites `minimum-confidence` in `wafs/openappsec/localconfig/local_policy.yaml`, waits for the smart-sync sidecar to reload, re-runs the corpus at each level, then invokes `wafeval ladder` to produce the combined artefact. **Needs `make up-ml` first; ≈40 min wall-clock** on a modest workstation. The script leaves the policy file on whatever level ran last; re-set to `critical` afterwards.
 - Headline 4-level ablation shipped in `results/reports/openappsec-ladder-20260423T084442Z/`. See "Research findings so far" below for the (unexpectedly flat) result.
 - Paranoia-level ladder: [tests/paranoia_ladder.sh](tests/paranoia_ladder.sh) / `make ladder-paranoia` sweeps modsec-ph + coraza-ph through PL 1→2→3→4 by flipping `MODSEC_PARANOIA_PH` / `CORAZA_PARANOIA_PH` env vars on the compose anchors (`x-modsec-env-ph`, `x-coraza-ph-directives`), force-recreating the six PH services between levels. Defaults preserve the canonical PL4 behaviour when the envs are unset, so existing `make up-paranoia` flows are untouched. Needs `make up` + `make up-paranoia` first; budget ~60 min for the full 201-payload corpus.
+- **FPR / ROC overlay** — `wafeval ladder --steps pl1:attack-run-1,... --fpr-steps pl1:benign-run-1,...` joins a second set of benign-corpus runs (produced by `--classes benign --mutators noop`) onto the ladder. The report gains a *False-positive rate (benign corpus)* table (row per WAF, column per step) and the chart overlays a dashed black line per WAF so the reader can read the attack/FPR trade-off directly. CSV outputs grow a sibling `ladder-fpr.csv` so the joined axes are analyst-friendly. See the `paranoia-ladder-with-fpr-*` report under `results/reports/` for the shipping example.
 
 ### Runtime knobs
 
@@ -226,7 +228,7 @@ bash tests/phase5.sh   # analyzer + reporter
 bash tests/phase6.sh   # FastAPI + dashboard
 ```
 
-Engine unit tests (117 passing, post Phase-7):
+Engine unit tests (126 passing, post Phase-7):
 
 ```bash
 nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-link '<nixpkgs>' -A stdenv.cc.cc.lib)/lib:\$(nix-build --no-out-link '<nixpkgs>' -A zlib)/lib:\$LD_LIBRARY_PATH engine/.venv/bin/python -m pytest engine/tests -q"
@@ -236,7 +238,7 @@ nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-
 
 ## Corpus
 
-**12 vuln classes, 201 payloads** (`engine/src/wafeval/payloads/*.yaml`):
+**12 vuln classes, 201 payloads** — plus a separate **benign corpus** for FPR measurement (see bottom row) — (`engine/src/wafeval/payloads/*.yaml`):
 
 | Class | # | Notes |
 |---|---:|---|
@@ -252,8 +254,9 @@ nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-
 | **jndi** | **12** | Log4Shell base + lower/upper/env/date lookups + dotless-i bypass |
 | **graphql** | **10** | Introspection + batch + alias + fragment cycle |
 | **crlf** | **10** | Response splitting + Set-Cookie smuggle + LF-only |
+| **benign** | **15** | Realistic product searches + usernames + natural-English "near-signal" (apostrophes, nested quotes, SQL-keyword phrases). Paired with the `noop` mutator for clean FPR measurement; excluded from default runs (load via `--classes benign`). |
 
-Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice Shop ("SQLITE_ERROR"). WAF-view-only classes use `TriggerStatus: 200` — the endpoint always 200s, so the WAF's decision drives the verdict.
+Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice Shop ("SQLITE_ERROR"). WAF-view-only classes use `TriggerStatus: 200` — the endpoint always 200s, so the WAF's decision drives the verdict. Benign entries use the same `status: 200` pattern since "baseline returned 200" simply means the backend handled the realistic request.
 
 ---
 
@@ -280,6 +283,13 @@ Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice 
 
 - **Coraza closes the lexical bypass at PL2** (3.6 % → 0 %). PL3 and PL4 add no further signal over PL2 for this mutator class — useful input for operators choosing between false-positive risk and enforcement strength.
 - **ModSec stays flat at 3.6 % across all 4 levels.** Empirical confirmation of the known `PARANOIA=N` env-var limitation already flagged in this doc — the image's env var doesn't reach the rules Coraza's `setvar:tx.blocking_paranoia_level=N` activates, so turning the knob up is a no-op for the payload families the image's env actually governs. Real-world deployment gotcha worth a paper footnote.
+
+**False-positive rate overlay** (smoke run `paranoia-ladder-with-fpr-20260423T134224Z`, attack = SQLi × lexical, benign = 15-payload realistic-traffic corpus × `noop` mutator, DVWA):
+
+- **Coraza PL4 blocks 100 % of benign traffic** — every single realistic string in the benign corpus (`apple juice`, `banana`, `alice`, `admin`, `42`, etc.) returns 403. Coraza PL4 is security-effective but operationally unusable for real users; the FPR cost is the whole denominator.
+- **ModSec PL4 FPR stays at 0 %**, matching its flat bypass line — once again the `PARANOIA=N` env lever doesn't reach the rules that over-block benign text (which is consistent with it also not reaching the rules that block attacks).
+- Both WAFs at PL1: 0 % FPR, ~3.6 % bypass on lexical. So PL1 is the operationally sane default; PL4 on Coraza only pays off if the deployment can absorb total benign loss, which real deployments cannot.
+- Methodology note: ladder's built-in FPR overlay (`--fpr-steps`) joins a benign run per step onto the attack ladder, inverting the waf_view bypass rate (`1 − rate`) to get FPR. Wilson CIs flip symmetrically; CSVs grow a sibling `ladder-fpr.csv` so analysts can re-slice without recomputing.
 
 **Adaptive composition beats every single mutator** (smoke run `adaptive-smoke-20260423T123145Z`, seeded on `phase3-20260423T115006Z`):
 

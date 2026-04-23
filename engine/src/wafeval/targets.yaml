@@ -96,6 +96,17 @@ targets:
         path: "/vulnerabilities/xss_r/"
         query: { name: "{payload}" }
         expect_auth: true
+      benign:
+        method: GET
+        path: "/vulnerabilities/sqli/"
+        query:
+          id: "{payload}"
+          Submit: "Submit"
+        expect_auth: true
+        notes: "Benign-corpus FPR sink. Trigger is just status=200 — DVWA's SQLi endpoint returns 200 for ANY query string (even ones that yield zero rows or a SQL syntax error), so status=200 means 'backend handled the request', and a WAF 403/406 is a clear FP."
+        trigger:
+          kind: status
+          code: 200
 
   webgoat:
     base_path: ""
@@ -131,6 +142,16 @@ targets:
           field2: "111"
         expect_auth: true
         notes: "WebGoat XSS assignment 5a — checkout form reflects field1 into HTML."
+        trigger:
+          kind: regex
+          pattern: '"attemptWasMade"\s*:\s*true'
+      benign:
+        method: POST
+        path: "/WebGoat/SqlInjection/attack2"
+        form:
+          query: "{payload}"
+        expect_auth: true
+        notes: "Benign-corpus FPR sink — reuses the SqlInjection lesson handler, which 200s with attemptWasMade=true for any query that reaches it."
         trigger:
           kind: regex
           pattern: '"attemptWasMade"\s*:\s*true'
@@ -182,6 +203,15 @@ targets:
         path: "/rest/products/search"
         query: { q: "{payload}" }
         expect_auth: false
+      benign:
+        method: GET
+        path: "/rest/products/search"
+        query: { q: "{payload}" }
+        expect_auth: false
+        notes: "Benign-corpus FPR sink — same Juice Shop search endpoint, trigger matches the normal JSON success shape."
+        trigger:
+          kind: regex
+          pattern: '"status"\s*:\s*"success"'
 
 routes:
   # Traefik Host-header → (waf, target). Baseline is the "no WAF" control.

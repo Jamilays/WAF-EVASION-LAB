@@ -34,6 +34,12 @@ class VulnClass(StrEnum):
     JNDI = "jndi"         # CVE-2021-44228 Log4Shell patterns + obfuscations
     GRAPHQL = "graphql"   # introspection abuse, batch/alias attacks
     CRLF = "crlf"         # HTTP response splitting, CR/LF header injection
+    # Post-Phase-7 — realistic non-attack traffic. Runs through the same
+    # routes as the attack classes, but the analyzer interprets ``BLOCKED``
+    # as a false-positive rather than a WAF win. Paired with the ``noop``
+    # mutator for clean FPR measurement (a user never sends ``aPpLe JUICE``
+    # to a real search box).
+    BENIGN = "benign"
 
 
 # ---------- trigger check (how we confirm a baseline exploit "worked") --------

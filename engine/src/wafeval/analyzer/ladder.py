@@ -1,4 +1,4 @@
-"""Ladder / ablation analyzer — one bypass-rate sample per (label, mutator).
+"""Ladder / ablation analyzer — bypass rate and optional FPR per step.
 
 The headline use case is the open-appsec minimum-confidence ablation
 (`critical` → `high` → `medium` → `low`): one run per setting, plotted as
@@ -14,10 +14,13 @@ reporting picks the WAF column from each run (after filtering
 multiple WAFs into one run, the ladder is computed per WAF separately
 and the rendered figure has one line per (waf, mutator) pair.
 
-False-positive-rate measurement would bolt on here later once we ship a
-benign-traffic corpus — each run would also produce a FPR datapoint, and
-the plot would become an ROC-ish curve per mutator. For now the Y-axis
-is plain bypass rate.
+**FPR overlay.** Passing a second set of ``fpr_steps`` (same step labels,
+separate run_ids against the ``benign`` corpus + ``noop`` mutator) lets
+the ladder compute a false-positive rate per (step, waf) and overlay it
+as dashed lines on the same chart — turns the simple line into an
+ROC-ish trade-off view. The markdown report gains a dedicated FPR table;
+the CSV grows ``fpr`` / ``fpr_ci_lo`` / ``fpr_ci_hi`` columns joined on
+``(step, waf)``.
 """
 from __future__ import annotations
 
@@ -34,6 +37,56 @@ from wafeval.analyzer.bypass import compute_rates
 
 
 _MUTATOR_ORDER = ["lexical", "encoding", "structural", "context_displacement", "multi_request"]
+
+
+def build_fpr_table(
+    results_root: Path,
+    fpr_steps: list[tuple[str, str]],
+    target: str,
+) -> pd.DataFrame:
+    """Return one FPR row per (step, waf) from a benign-corpus ladder.
+
+    Each ``fpr_steps`` run_id is expected to come from a ``--classes
+    benign --mutators noop`` engine invocation against the same WAFs as
+    the attack ladder. The frame drops anything that isn't the ``benign``
+    class so a mixed run still produces clean numbers; on-target filter
+    matches the attack-ladder's ``target`` arg so the two axes are
+    apples-to-apples.
+
+    FPR is computed by taking the waf_view bypass rate (``allowed +
+    flagged`` over eligible) on the benign subset and flipping it: a
+    benign request that the WAF *didn't* forward is a false positive.
+    The Wilson CI flips the same way (``1 − ci_hi`` becomes the lower
+    FPR bound).
+    """
+    rows: list[pd.DataFrame] = []
+    for step_label, run_id in fpr_steps:
+        df = load_run(Path(results_root), run_id)
+        if df.empty:
+            continue
+        sub = df[
+            (df["target"] == target)
+            & (df["waf"] != "baseline")
+            & (df["vuln_class"] == "benign")
+        ]
+        if sub.empty:
+            continue
+        rates = compute_rates(sub, ["waf"], lens="waf_view")
+        rates = rates.assign(
+            fpr=(1.0 - rates["rate"]),
+            fpr_ci_lo=(1.0 - rates["ci_hi"]),
+            fpr_ci_hi=(1.0 - rates["ci_lo"]),
+            step=step_label,
+            target=target,
+        )
+        rows.append(
+            rates[["step", "waf", "fpr", "fpr_ci_lo", "fpr_ci_hi", "n", "k", "target"]]
+        )
+    if not rows:
+        return pd.DataFrame(columns=[
+            "step", "waf", "fpr", "fpr_ci_lo", "fpr_ci_hi", "n", "k", "target",
+        ])
+    return pd.concat(rows, ignore_index=True)
 
 
 def build_ladder_table(
@@ -75,6 +128,7 @@ def render_ladder_chart(
     out_dir: Path,
     stem: str = "ladder",
     title: str = "Bypass rate vs ablation step",
+    fpr_table: pd.DataFrame | None = None,
 ) -> list[Path]:
     """Render a line chart: x = step (categorical, left→right), y = rate.
 
@@ -82,6 +136,10 @@ def render_ladder_chart(
     dimensions as hue + style cleanly when the categorical x-axis has no
     numeric order, so we plot one line at a time and handle the legend
     manually. Returns [png, svg] paths.
+
+    ``fpr_table`` (optional, from ``build_fpr_table``) overlays a dashed
+    black line per WAF showing false-positive rate at each step, so a
+    reader can read the trade-off directly off the same axes.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     if table.empty:
@@ -114,10 +172,32 @@ def render_ladder_chart(
             ax.fill_between(sub["step_idx"], sub["ci_lo"], sub["ci_hi"],
                             color=palette[mi], alpha=0.10)
 
+    if fpr_table is not None and not fpr_table.empty:
+        fpr = fpr_table.copy()
+        fpr["step_idx"] = fpr["step"].map({s: i for i, s in enumerate(step_order)})
+        # One dashed black line per WAF — different marker shape per WAF so
+        # the overlay stays readable even when the attack lines use the
+        # whole palette.
+        fpr_markers = ["s", "D", "^", "v", "P", "X"]
+        for wi, waf in enumerate(sorted(fpr["waf"].unique())):
+            sub = fpr[fpr["waf"] == waf].sort_values("step_idx")
+            if sub.empty:
+                continue
+            ax.plot(
+                sub["step_idx"], sub["fpr"],
+                marker=fpr_markers[wi % len(fpr_markers)],
+                linestyle="--",
+                color="black",
+                alpha=0.7,
+                label=f"FPR · {waf}",
+            )
+            ax.fill_between(sub["step_idx"], sub["fpr_ci_lo"], sub["fpr_ci_hi"],
+                            color="black", alpha=0.08)
+
     ax.set_xticks(range(len(step_order)))
     ax.set_xticklabels(step_order, rotation=0)
     ax.set_xlabel("ablation step (ordered by caller)")
-    ax.set_ylabel("bypass rate (95 % Wilson CI)")
+    ax.set_ylabel("rate (95 % Wilson CI)")
     ax.set_ylim(0, 1)
     ax.set_title(title)
     ax.legend(loc="best", fontsize="x-small", ncols=2)
@@ -137,16 +217,29 @@ def render_ladder_markdown(
     out_path: Path,
     figures: list[Path],
     title: str = "Ladder ablation",
+    fpr_table: pd.DataFrame | None = None,
+    fpr_steps: list[tuple[str, str]] | None = None,
 ) -> Path:
-    """Emit a small Markdown report: provenance + pivot + inlined figures."""
+    """Emit a small Markdown report: provenance + pivot + inlined figures.
+
+    ``fpr_table`` (+ its ``fpr_steps`` for provenance) adds a dedicated
+    false-positive-rate table — one row per WAF, one column per step —
+    so a reader can eyeball the trade-off alongside the per-mutator
+    bypass numbers.
+    """
     out_path.parent.mkdir(parents=True, exist_ok=True)
     lines: list[str] = [f"# {title}", ""]
     lines.append("## Provenance")
     lines.append("")
-    lines.append("| Step | Source run_id |")
-    lines.append("|---|---|")
+    lines.append("| Step | Attack run_id |" + (" FPR run_id |" if fpr_steps else ""))
+    lines.append("|---|---|" + ("---|" if fpr_steps else ""))
+    fpr_run_by_step = dict(fpr_steps) if fpr_steps else {}
     for step_label, rid in steps:
-        lines.append(f"| `{step_label}` | `{rid}` |")
+        row = f"| `{step_label}` | `{rid}` |"
+        if fpr_steps:
+            fpr_rid = fpr_run_by_step.get(step_label, "—")
+            row += f" `{fpr_rid}` |"
+        lines.append(row)
     lines.append("")
 
     if table.empty:
@@ -170,6 +263,22 @@ def render_ladder_markdown(
         for mut, row in pivot.iterrows():
             cells = [f"{v*100:.1f}%" if pd.notna(v) else "—" for v in row.values]
             lines.append(f"| `{mut}` | " + " | ".join(cells) + " |")
+        lines.append("")
+
+    if fpr_table is not None and not fpr_table.empty:
+        lines.append("## False-positive rate (benign corpus)")
+        lines.append("")
+        fpr_pivot = fpr_table.pivot(index="waf", columns="step", values="fpr")
+        fpr_pivot = fpr_pivot.reindex(
+            columns=[s for s in step_order if s in fpr_pivot.columns],
+        )
+        header = "| waf | " + " | ".join(fpr_pivot.columns) + " |"
+        sep = "|---|" + "|".join(["---:"] * len(fpr_pivot.columns)) + "|"
+        lines.append(header)
+        lines.append(sep)
+        for waf, row in fpr_pivot.iterrows():
+            cells = [f"{v*100:.1f}%" if pd.notna(v) else "—" for v in row.values]
+            lines.append(f"| `{waf}` | " + " | ".join(cells) + " |")
         lines.append("")
 
     pngs = [p for p in figures if p.suffix == ".png"]
