@@ -7,22 +7,7 @@ in rough priority order (top = most valuable-per-hour, bottom = largest).
 
 ## Medium-term (1–2 days each)
 
-### 1. Paranoia-level ablation on all 4 WAFs
-
-We already have `--profile paranoia-high` and a PL1 vs PL4 comparison. The
-natural extension: PL1 / PL2 / PL3 / PL4 ablation with same corpus,
-reported as a single table. Tells a reader "the false-positive / bypass
-trade-off at each level". Also useful material for the `analyzer/` to
-present the trade-off as a Pareto curve.
-
-**What's needed:**
-- Compose profiles for PL2 + PL3 (currently we have PL1 default and PL4)
-- Three extra runs (~20 min each at current MAX_CONCURRENCY=4)
-- Reporter: new "paranoia-tradeoff" figure
-
----
-
-### 2. Commercial WAF comparison
+### 1. Commercial WAF comparison
 
 The comparison every reviewer asks for: AWS WAF, Cloudflare managed rules,
 Azure WAF. Needs cloud accounts + paid-tier rulesets.
@@ -38,7 +23,7 @@ companion paper.
 
 ---
 
-### 3. Benign-traffic corpus for true FPR / ROC curves
+### 2. Benign-traffic corpus for true FPR / ROC curves
 
 The open-appsec confidence-ladder ablation came out flat (bypass rate
 ≈constant across `critical → high → medium → low`) because every payload
@@ -61,7 +46,7 @@ the raw record format.
 
 ---
 
-### 4. Replicate the original 40-payload subset
+### 3. Replicate the original 40-payload subset
 
 The paper used 20 SQLi + 20 XSS, specific entries. Running JUST those in
 our engine (ignoring the 161 we added) gives an apples-to-apples
@@ -77,7 +62,7 @@ reproduction number for the Discussion section.
 
 ## Long-term / aspirational
 
-### 5. Publish replication paper
+### 4. Publish replication paper
 
 We have enough data for a short replication report:
 - Abstract + Intro can cite our numbers vs the paper's
@@ -89,7 +74,7 @@ We have enough data for a short replication report:
 
 ---
 
-### 6. Real shadowd integrity + whitelist experiments
+### 5. Real shadowd integrity + whitelist experiments
 
 Shadow Daemon has three engines: blacklist (what we use), integrity
 (hash-based), whitelist (allow-list). The lab currently only exercises
@@ -102,7 +87,7 @@ whitelist rules from legit traffic, then running the corpus.
 
 ---
 
-### 7. Response-side fingerprinting
+### 6. Response-side fingerprinting
 
 Currently we record the WAF's response status + a snippet of the body.
 Richer fingerprinting (WAF name via `Server` header, rule IDs if

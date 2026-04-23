@@ -39,7 +39,11 @@ x-modsec-env: &modsec-env
   MODSEC_RULE_ENGINE: "On"
 
 x-modsec-env-ph: &modsec-env-ph
-  PARANOIA: "4"
+  # Default PL4 — the paranoia-high profile's headline value. The
+  # paranoia ladder (tests/paranoia_ladder.sh) overrides this via the
+  # MODSEC_PARANOIA_PH env var to sweep PL1..PL4 on the same routes
+  # without deploying fresh services per level.
+  PARANOIA: "${MODSEC_PARANOIA_PH:-4}"
   ANOMALY_INBOUND: "5"
   ANOMALY_OUTBOUND: "4"
   MODSEC_RULE_ENGINE: "On"
@@ -59,8 +63,13 @@ x-coraza-common: &coraza-common
     retries: 15
 
 x-coraza-ph-directives: &coraza-ph-directives
-  CORAZA_EXTRA_DIRECTIVES: |
-    SecAction "id:900100,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=4,setvar:tx.detection_paranoia_level=4"
+  # Default PL4 — same knob as modsec-env-ph's PARANOIA. The SecAction
+  # runs at phase:1 so it sets the two tx.* variables before any CRS
+  # rule chain evaluates them. The paranoia ladder flips
+  # ``CORAZA_PARANOIA_PH`` per sweep level; both tx.blocking_* and
+  # tx.detection_* move together so blocking and detection-only runs
+  # agree on the active rule set.
+  CORAZA_EXTRA_DIRECTIVES: 'SecAction "id:900100,phase:1,nolog,pass,t:none,setvar:tx.blocking_paranoia_level=${CORAZA_PARANOIA_PH:-4},setvar:tx.detection_paranoia_level=${CORAZA_PARANOIA_PH:-4}"'
 
 x-shadowd-proxy-common: &shadowd-proxy-common
   build:

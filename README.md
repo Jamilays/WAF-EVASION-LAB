@@ -85,6 +85,7 @@ Parked items live in [TODO.md](TODO.md).
 - Outputs: `results/processed/<out-id>/ladder.csv`, `results/figures/<out-id>/ladder.{png,svg}`, `results/reports/<out-id>/report-ladder.md`.
 - For open-appsec specifically, [tests/openappsec_ladder.sh](tests/openappsec_ladder.sh) (`make ladder-openappsec`) automates the full `critical → high → medium → low` sweep: rewrites `minimum-confidence` in `wafs/openappsec/localconfig/local_policy.yaml`, waits for the smart-sync sidecar to reload, re-runs the corpus at each level, then invokes `wafeval ladder` to produce the combined artefact. **Needs `make up-ml` first; ≈40 min wall-clock** on a modest workstation. The script leaves the policy file on whatever level ran last; re-set to `critical` afterwards.
 - Headline 4-level ablation shipped in `results/reports/openappsec-ladder-20260423T084442Z/`. See "Research findings so far" below for the (unexpectedly flat) result.
+- Paranoia-level ladder: [tests/paranoia_ladder.sh](tests/paranoia_ladder.sh) / `make ladder-paranoia` sweeps modsec-ph + coraza-ph through PL 1→2→3→4 by flipping `MODSEC_PARANOIA_PH` / `CORAZA_PARANOIA_PH` env vars on the compose anchors (`x-modsec-env-ph`, `x-coraza-ph-directives`), force-recreating the six PH services between levels. Defaults preserve the canonical PL4 behaviour when the envs are unset, so existing `make up-paranoia` flows are untouched. Needs `make up` + `make up-paranoia` first; budget ~60 min for the full 201-payload corpus.
 
 ### Runtime knobs
 
@@ -273,6 +274,11 @@ Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice 
 
 - Per-mutator bypass rate on Juice Shop (waf_view) from the ladder run: lexical ≈ 43%, encoding ≈ 51%, structural ≈ 21%, context_displacement ≈ 20%, multi_request ≈ 56%. The ML agent holds structural / context-displacement *better* than CRS holds the same mutators (both sit ~20%), but is *more leaky* on lexical and multi-request than CRS on JSON bodies.
 - **The `minimum-confidence` ladder is flat.** Sweeping `critical → high → medium → low` moves every mutator by <1 percentage point — well inside the Wilson CIs at this N (~±4 pp). That's an empirical result, not a tooling bug: the agent's classifier appears bimodal on this corpus, so loosening the threshold doesn't reclassify payloads. The knob would only matter on genuinely ambiguous traffic, which attack-only payloads don't produce. A true ROC-shaped curve needs a benign-traffic corpus (parked in [TODO.md](TODO.md)).
+
+**CRS paranoia-level ablation** (smoke run `paranoia-ladder-20260423T130814Z`, SQLi × lexical mutator on DVWA, waf_view lens):
+
+- **Coraza closes the lexical bypass at PL2** (3.6 % → 0 %). PL3 and PL4 add no further signal over PL2 for this mutator class — useful input for operators choosing between false-positive risk and enforcement strength.
+- **ModSec stays flat at 3.6 % across all 4 levels.** Empirical confirmation of the known `PARANOIA=N` env-var limitation already flagged in this doc — the image's env var doesn't reach the rules Coraza's `setvar:tx.blocking_paranoia_level=N` activates, so turning the knob up is a no-op for the payload families the image's env actually governs. Real-world deployment gotcha worth a paper footnote.
 
 **Adaptive composition beats every single mutator** (smoke run `adaptive-smoke-20260423T123145Z`, seeded on `phase3-20260423T115006Z`):
 
