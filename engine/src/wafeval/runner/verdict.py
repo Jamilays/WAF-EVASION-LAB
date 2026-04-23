@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from typing import Final
 
-from wafeval.models import Payload, RouteResult, TriggerContains, TriggerReflected, TriggerRegex, TriggerStatus, Verdict
+from wafeval.models import Payload, RouteResult, Trigger, TriggerContains, TriggerReflected, TriggerRegex, TriggerStatus, Verdict
 
 _BLOCK_STATUS_CODES: Final = frozenset({403, 406, 501})
 _FLAG_HEADERS: Final = (
@@ -42,17 +42,24 @@ _BLOCK_BODY_MARKERS: Final = (
 )
 
 
-def baseline_triggered(payload: Payload, baseline: RouteResult) -> bool:
+def baseline_triggered(
+    payload: Payload,
+    baseline: RouteResult,
+    trigger_override: Trigger | None = None,
+) -> bool:
     """True iff the baseline response proves the vuln fired.
 
     Returns False on any network-level error. For ``reflected`` triggers the
     marker defaults to the raw payload body when the author didn't supply one.
+    ``trigger_override`` supersedes ``payload.trigger`` — used when the target
+    endpoint has a response-shape marker that's independent of the payload
+    body (e.g. WebGoat's ``"attemptWasMade" : true`` JSON field).
     """
     if baseline.error or baseline.status_code is None or baseline.response_snippet is None:
         return False
     body = baseline.response_snippet
 
-    t = payload.trigger
+    t = trigger_override or payload.trigger
     return _match_trigger(t, body, baseline.status_code, payload)
 
 
@@ -79,6 +86,7 @@ def classify(
     payload: Payload,
     baseline: RouteResult,
     waf_route: RouteResult,
+    trigger_override: Trigger | None = None,
 ) -> Verdict:
     """Return the verdict for one (payload, waf_route) datapoint.
 
@@ -101,7 +109,7 @@ def classify(
     # The block + "allowed" decisions below only make sense when the payload
     # was actually capable of exploiting the app — check the baseline first
     # so the denominator is the same across WAFs.
-    if not baseline_triggered(payload, baseline):
+    if not baseline_triggered(payload, baseline, trigger_override):
         return Verdict.BASELINE_FAIL
 
     code = waf_route.status_code
@@ -121,7 +129,7 @@ def classify(
     # Shop's /rest/products/search returns 500 + SQLITE_ERROR on a successful
     # SQLi — still an "allowed" bypass because the payload reached the sink).
     if code is not None and (200 <= code < 300 or 500 <= code < 600):
-        if _match_trigger(payload.trigger, waf_snippet, code, payload):
+        if _match_trigger(trigger_override or payload.trigger, waf_snippet, code, payload):
             if headers_flagged or any(m in body for m in _BLOCK_BODY_MARKERS):
                 return Verdict.FLAGGED
             return Verdict.ALLOWED

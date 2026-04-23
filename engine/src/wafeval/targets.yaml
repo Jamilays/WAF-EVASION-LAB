@@ -10,12 +10,19 @@
 #   * DVWA: SSTI + XXE endpoints removed (no real Jinja/XML sink in DVWA —
 #     earlier config routed them to /vulnerabilities/xss_r which never fired
 #     the trigger, producing 100% baseline_fail noise).
-#   * WebGoat: endpoints dropped until real per-lesson targeting lands
-#     (Phase 7). Pointing every class at /WebGoat/login produced zero real
-#     baselines and polluted every run's Juice-Shop-vs-WebGoat comparison.
 #   * Juice Shop: kept SQLi (real sink at /rest/products/search) and XSS
 #     (JSON reflection visible in the body). Cmdi/lfi/ssti/xxe removed
 #     until a backend with those sinks is wired up.
+#
+# Post-Phase-7 additions:
+#   * WebGoat: restored with per-lesson targeting. sqli → SqlInjection/attack2
+#     (takes a single ``query`` form field, runs it as SQL), xss →
+#     CrossSiteScripting/attack5a (credit-card checkout that reflects field1).
+#     Both endpoints return JSON with ``"attemptWasMade" : true`` whenever the
+#     payload reaches the lesson handler — regardless of whether the exploit
+#     succeeded — so we set a per-endpoint ``trigger`` override rather than
+#     relying on the payload's default marker (which targets DVWA's "First
+#     name" echo or Juice Shop's SQLITE_ERROR).
 
 targets:
   dvwa:
@@ -90,6 +97,44 @@ targets:
         query: { name: "{payload}" }
         expect_auth: true
 
+  webgoat:
+    base_path: ""
+    login:
+      kind: webgoat
+      path: "/WebGoat/login"
+      register_path: "/WebGoat/register.mvc"
+      username: waflab
+      password: wafpw123    # Spring validator caps at 10 chars.
+      prime_paths:
+        - /WebGoat/SqlInjection.lesson
+        - /WebGoat/CrossSiteScripting.lesson
+    endpoints:
+      sqli:
+        method: POST
+        path: "/WebGoat/SqlInjection/attack2"
+        form:
+          query: "{payload}"
+        expect_auth: true
+        notes: "WebGoat SQLi assignment 2 — arbitrary SQL in the `query` field."
+        trigger:
+          kind: regex
+          pattern: '"attemptWasMade"\s*:\s*true'
+      xss:
+        method: GET
+        path: "/WebGoat/CrossSiteScripting/attack5a"
+        query:
+          QTY1: "1"
+          QTY2: "1"
+          QTY3: "1"
+          QTY4: "1"
+          field1: "{payload}"
+          field2: "111"
+        expect_auth: true
+        notes: "WebGoat XSS assignment 5a — checkout form reflects field1 into HTML."
+        trigger:
+          kind: regex
+          pattern: '"attemptWasMade"\s*:\s*true'
+
   juiceshop:
     base_path: ""
     endpoints:
@@ -140,29 +185,42 @@ targets:
 
 routes:
   # Traefik Host-header → (waf, target). Baseline is the "no WAF" control.
-  # WebGoat routes are kept in the Traefik config (wafs still observe them)
-  # but no target endpoints above → the runner skips WebGoat automatically.
+  # WebGoat routes are in the Traefik config *and* in the target endpoints
+  # above (post-Phase-7 restore) — the runner now exercises the 4×3 matrix
+  # the paper described.
   - host: baseline-dvwa.local
     waf: baseline
     target: dvwa
+  - host: baseline-webgoat.local
+    waf: baseline
+    target: webgoat
   - host: baseline-juiceshop.local
     waf: baseline
     target: juiceshop
   - host: modsec-dvwa.local
     waf: modsec
     target: dvwa
+  - host: modsec-webgoat.local
+    waf: modsec
+    target: webgoat
   - host: modsec-juiceshop.local
     waf: modsec
     target: juiceshop
   - host: coraza-dvwa.local
     waf: coraza
     target: dvwa
+  - host: coraza-webgoat.local
+    waf: coraza
+    target: webgoat
   - host: coraza-juiceshop.local
     waf: coraza
     target: juiceshop
   - host: shadowd-dvwa.local
     waf: shadowd
     target: dvwa
+  - host: shadowd-webgoat.local
+    waf: shadowd
+    target: webgoat
   - host: shadowd-juiceshop.local
     waf: shadowd
     target: juiceshop
@@ -173,12 +231,18 @@ routes:
   - host: modsec-ph-dvwa.local
     waf: modsec-ph
     target: dvwa
+  - host: modsec-ph-webgoat.local
+    waf: modsec-ph
+    target: webgoat
   - host: modsec-ph-juiceshop.local
     waf: modsec-ph
     target: juiceshop
   - host: coraza-ph-dvwa.local
     waf: coraza-ph
     target: dvwa
+  - host: coraza-ph-webgoat.local
+    waf: coraza-ph
+    target: webgoat
   - host: coraza-ph-juiceshop.local
     waf: coraza-ph
     target: juiceshop
@@ -186,6 +250,9 @@ routes:
   - host: openappsec-dvwa.local
     waf: openappsec
     target: dvwa
+  - host: openappsec-webgoat.local
+    waf: openappsec
+    target: webgoat
   - host: openappsec-juiceshop.local
     waf: openappsec
     target: juiceshop

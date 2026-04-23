@@ -7,24 +7,7 @@ in rough priority order (top = most valuable-per-hour, bottom = largest).
 
 ## Near-term (half-day each)
 
-### 1. Restore WebGoat with real lesson endpoints
-
-Current state: WebGoat is booted but has no endpoints wired in
-`targets.yaml` because hitting `/WebGoat/login` didn't trigger any real
-sink. The paper matrix is 4 WAFs × 3 targets; we're at 4 × 2.
-
-**What's needed:**
-- Seed a WebGoat account + cookie bootstrapper (similar to the DVWA one)
-- Call `POST /WebGoat/service/restartlesson.mvc` to activate a lesson
-- Add endpoints for SqlInjection/assignment5a (SQLi), CrossSiteScripting/attack5a (XSS)
-- Verify triggers: WebGoat returns JSON with `lessonCompleted: true` on success
-- Extend `load_dvwa_session` → a `load_webgoat_session` sibling
-
-**Effort:** ~half a day, mostly figuring out the WebGoat lesson API.
-
----
-
-### 2. Split `allowed_with_marker` vs `allowed_sanitized`
+### 1. Split `allowed_with_marker` vs `allowed_sanitized`
 
 Current verdict `ALLOWED` lumps together:
 - WAF passed the request, payload triggered at the sink (real bypass), AND
@@ -39,11 +22,9 @@ Current verdict `ALLOWED` lumps together:
 
 ---
 
----
-
 ## Medium-term (1–2 days each)
 
-### 3. Adaptive / genetic mutator
+### 2. Adaptive / genetic mutator
 
 Current mutators emit fixed variants. An `adaptive.py` mutator would:
 - Observe which transforms bypass per WAF
@@ -58,7 +39,7 @@ paper-grade "WAFs can't keep up with evolving attackers" material.
 
 ---
 
-### 4. Paranoia-level ablation on all 4 WAFs
+### 3. Paranoia-level ablation on all 4 WAFs
 
 We already have `--profile paranoia-high` and a PL1 vs PL4 comparison. The
 natural extension: PL1 / PL2 / PL3 / PL4 ablation with same corpus,
@@ -73,7 +54,7 @@ present the trade-off as a Pareto curve.
 
 ---
 
-### 5. Commercial WAF comparison
+### 4. Commercial WAF comparison
 
 The comparison every reviewer asks for: AWS WAF, Cloudflare managed rules,
 Azure WAF. Needs cloud accounts + paid-tier rulesets.
@@ -89,7 +70,7 @@ companion paper.
 
 ---
 
-### 6. Benign-traffic corpus for true FPR / ROC curves
+### 5. Benign-traffic corpus for true FPR / ROC curves
 
 The open-appsec confidence-ladder ablation came out flat (bypass rate
 ≈constant across `critical → high → medium → low`) because every payload
@@ -112,7 +93,7 @@ the raw record format.
 
 ---
 
-### 7. Replicate the original 40-payload subset
+### 6. Replicate the original 40-payload subset
 
 The paper used 20 SQLi + 20 XSS, specific entries. Running JUST those in
 our engine (ignoring the 161 we added) gives an apples-to-apples
@@ -128,7 +109,7 @@ reproduction number for the Discussion section.
 
 ## Long-term / aspirational
 
-### 8. Publish replication paper
+### 7. Publish replication paper
 
 We have enough data for a short replication report:
 - Abstract + Intro can cite our numbers vs the paper's
@@ -140,7 +121,7 @@ We have enough data for a short replication report:
 
 ---
 
-### 9. Real shadowd integrity + whitelist experiments
+### 8. Real shadowd integrity + whitelist experiments
 
 Shadow Daemon has three engines: blacklist (what we use), integrity
 (hash-based), whitelist (allow-list). The lab currently only exercises
@@ -153,7 +134,7 @@ whitelist rules from legit traffic, then running the corpus.
 
 ---
 
-### 10. Response-side fingerprinting
+### 9. Response-side fingerprinting
 
 Currently we record the WAF's response status + a snippet of the body.
 Richer fingerprinting (WAF name via `Server` header, rule IDs if

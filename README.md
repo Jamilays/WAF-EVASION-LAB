@@ -43,7 +43,7 @@ Parked items live in [TODO.md](TODO.md).
 |---|---|---|
 | **DVWA** (`vulnerables/web-dvwa:latest`) | Login via `POST /login.php` with scraped `user_token` (see `runner/session.py`). The `security` cookie is set **directly by the engine** (not via `/security.php?security=low` GET which relies on 302 redirect that `follow_redirects=False` misses). | `/vulnerabilities/exec/` runs `ping -c 4 <ip>` → ~4 s per baseline request → saturates PHP-FPM pool. **Use `MAX_CONCURRENCY=4` for cmdi workloads** (see note below). |
 | **Juice Shop** (`bkimminich/juice-shop:v19.2.1`) | Unauthenticated. | `/rest/products/search?q=` is the canonical SQLi sink (SQLite → `SQLITE_ERROR` page leaks details on malformed queries). Does NOT reflect `q` in JSON, so XSS there is `baseline_fail` and intentionally has no endpoint in targets.yaml. |
-| **WebGoat** (`webgoat/webgoat:v2025.3`) | Unauthenticated for login endpoint; lesson API requires Spring session. | **No endpoints in targets.yaml** — the previous `/WebGoat/login?q=` routing never triggered anything. Restoring WebGoat is in [TODO.md](TODO.md) item #1. Matrix is **4 WAFs × 2 targets** right now, not 4 × 3. |
+| **WebGoat** (`webgoat/webgoat:v2025.3`) | Spring-Security form login, lesson state kept per-session. No default user — the engine self-registers `waflab` / `wafpw123` on first run (Spring validator caps the password at 10 chars). | Lesson routes 404 until the lesson page is primed. Bootstrapper GETs `/WebGoat/SqlInjection.lesson` + `/WebGoat/CrossSiteScripting.lesson` after login to initialise the session's lesson slots; then `/SqlInjection/attack2` (form field `query`) and `/CrossSiteScripting/attack5a` (query param `field1`) land payloads. Every response contains `"attemptWasMade" : true` once a payload reaches the lesson handler — that's the per-endpoint `trigger` in [targets.yaml](engine/src/wafeval/targets.yaml), overriding each payload's DVWA/Juice-Shop default marker. |
 
 ### Engine (Python, `engine/src/wafeval/`)
 
@@ -173,7 +173,7 @@ Both mount `results/` read-only. Trigger a run with `make run` and watch the Liv
 
 **With `--profile ml`** (+3): `openappsec-*` — all routed to the single `openappsec` container which splits by Host-header internally.
 
-**Note:** WebGoat has routes but **no engine endpoints** (see targets.yaml). The engine skips WebGoat automatically. Restoring it is [TODO.md](TODO.md) item #1.
+All three targets have engine endpoints — the paper's 4 WAFs × 3 targets matrix is now fully wired. WebGoat's `expect_auth=true` endpoints use the `login.kind=webgoat` bootstrapper (register-then-login + per-lesson prime GETs).
 
 ---
 
@@ -222,7 +222,7 @@ bash tests/phase5.sh   # analyzer + reporter
 bash tests/phase6.sh   # FastAPI + dashboard
 ```
 
-Engine unit tests (99 passing as of Phase-7 close):
+Engine unit tests (104 passing, post Phase-7):
 
 ```bash
 nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-link '<nixpkgs>' -A stdenv.cc.cc.lib)/lib:\$(nix-build --no-out-link '<nixpkgs>' -A zlib)/lib:\$LD_LIBRARY_PATH engine/.venv/bin/python -m pytest engine/tests -q"

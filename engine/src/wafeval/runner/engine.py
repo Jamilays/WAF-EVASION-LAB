@@ -45,7 +45,7 @@ from wafeval.models import (
 )
 from wafeval.mutators.base import REGISTRY
 from wafeval.payloads.loader import load_corpus
-from wafeval.runner.session import DEFAULT_USER_AGENT, login_dvwa
+from wafeval.runner.session import DEFAULT_USER_AGENT, login_dvwa, login_webgoat
 from wafeval.runner.verdict import classify
 
 log = structlog.get_logger(__name__)
@@ -243,6 +243,8 @@ async def _auth_for_route(
         return None
     if not any(ep.expect_auth for ep in spec.endpoints.values()):
         return None
+    if spec.login.kind == "webgoat":
+        return await login_webgoat(client, base_url, route.host, spec.login)
     return await login_dvwa(client, base_url, route.host, spec.login)
 
 
@@ -303,7 +305,7 @@ async def _process_variant(
             waf_cookies = cookies_by_route.get(route.host)
             waf_result = await _send(waf_client, base_url, route.host, ep, variant, variant.body, waf_cookies)
 
-    verdict = classify(payload, baseline, waf_result)
+    verdict = classify(payload, baseline, waf_result, trigger_override=ep.trigger)
     rec = VerdictRecord(
         run_id=run_id,
         waf=route.waf,

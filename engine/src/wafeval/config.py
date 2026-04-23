@@ -12,16 +12,31 @@ from typing import Literal
 import yaml
 from pydantic import BaseModel, ConfigDict
 
-from wafeval.models import VulnClass
+from wafeval.models import Trigger, VulnClass
 
 
-class DvwaLogin(BaseModel):
+class LoginSpec(BaseModel):
+    """Per-target authentication bootstrapper spec.
+
+    ``kind`` picks the concrete bootstrapper implementation in ``runner/session.py``:
+
+      * ``dvwa``    — GET login-page, scrape CSRF ``user_token``, POST form,
+                      stamp ``security=low`` cookie client-side.
+      * ``webgoat`` — POST register (idempotent — WebGoat 409s on re-use,
+                      handled as "user already exists"), POST login, then GET
+                      each ``prime_paths`` URL to initialise lesson state.
+                      WebGoat's password validator caps length at 10 characters.
+    """
     model_config = ConfigDict(extra="forbid")
-    method: Literal["POST"]
+    kind: Literal["dvwa", "webgoat"] = "dvwa"
+    method: Literal["POST"] = "POST"
     path: str
-    form_tokenized: bool
+    form_tokenized: bool = False
     username: str
     password: str
+    # WebGoat-only fields (ignored for kind="dvwa").
+    register_path: str | None = None
+    prime_paths: list[str] = []
 
 
 class EndpointSpec(BaseModel):
@@ -32,12 +47,18 @@ class EndpointSpec(BaseModel):
     form: dict[str, str] = {}
     expect_auth: bool = False
     notes: str | None = None
+    # Per-endpoint trigger override. Some backends (e.g. WebGoat lesson API)
+    # have a success signature that's independent of the payload body (a
+    # JSON field like ``"attemptWasMade" : true``) — a single payload's
+    # trigger can't match both that and the DVWA / Juice Shop sinks, so the
+    # endpoint specifies its own. Falls back to ``payload.trigger`` when None.
+    trigger: Trigger | None = None
 
 
 class TargetSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
     base_path: str = ""
-    login: DvwaLogin | None = None
+    login: LoginSpec | None = None
     endpoints: dict[VulnClass, EndpointSpec]
 
 

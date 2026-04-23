@@ -129,3 +129,32 @@ def test_5xx_without_marker_is_baseline_fail(payload):
     baseline = _rr("baseline-dvwa.local", 200, "First name: admin")
     waf = _rr("coraza-dvwa.local", 500, "something went wrong — not a WAF signature")
     assert classify(payload, baseline, waf) is Verdict.BASELINE_FAIL
+
+
+def test_trigger_override_supersedes_payload_trigger(payload):
+    """Per-endpoint trigger (e.g. WebGoat JSON marker) wins over payload.trigger.
+
+    ``payload`` fixture's trigger is ``contains "First name"``. Without the
+    override, a WebGoat baseline wouldn't match and everything would collapse
+    to BASELINE_FAIL. With the override set to the WebGoat JSON field, the
+    exact same responses classify as ALLOWED.
+    """
+    from wafeval.models import TriggerRegex
+    override = TriggerRegex(pattern=r'"attemptWasMade"\s*:\s*true')
+    wg_body = '{"lessonCompleted" : false, "attemptWasMade" : true}'
+    baseline = _rr("baseline-webgoat.local", 200, wg_body)
+    waf = _rr("modsec-webgoat.local", 200, wg_body)
+
+    # Without override: baseline body has no "First name" → baseline_fail.
+    assert classify(payload, baseline, waf) is Verdict.BASELINE_FAIL
+    # With override: WebGoat JSON marker matches → allowed.
+    assert classify(payload, baseline, waf, trigger_override=override) is Verdict.ALLOWED
+
+
+def test_trigger_override_still_blocks_on_403(payload):
+    """Override only changes the marker — the block signature (403) still wins."""
+    from wafeval.models import TriggerRegex
+    override = TriggerRegex(pattern=r'"attemptWasMade"\s*:\s*true')
+    baseline = _rr("baseline-webgoat.local", 200, '{"attemptWasMade" : true}')
+    waf = _rr("modsec-webgoat.local", 403, "403 Forbidden")
+    assert classify(payload, baseline, waf, trigger_override=override) is Verdict.BLOCKED
