@@ -17,7 +17,7 @@ dashboard/
 └── src/
     ├── main.tsx, App.tsx, types.ts, api.ts, index.css
     ├── components/VerdictBadge.tsx
-    └── tabs/{LiveRun,Results,PayloadExplorer,CompareRuns}.tsx
+    └── tabs/{LiveRun,Results,CrossWAF,HallOfFame,PayloadExplorer,CompareRuns}.tsx
 ```
 
 ## Tabs
@@ -26,7 +26,9 @@ dashboard/
 |---|---|
 | **Live Run** | polls `/runs/{id}/live` every 2 s — progress bar, verdict histogram, last 30 records |
 | **Results** | `/runs/{id}/bypass-rates`, lens switch (true_bypass / waf_view), heatmap + table |
-| **Payload Explorer** | `/runs/{id}/per-variant` with filters → `/runs/{id}/records/...` drilldown |
+| **Cross-WAF** | `/runs/combined?ids=…` — multi-run merge, reorderable provenance, lens/target switch, tooltip shows each cell's source run |
+| **Hall of Fame** | `/runs/{id}/hall-of-fame?top_n=50` — variants ranked by (WAF × target) cells they bypassed |
+| **Payload Explorer** | `/runs/{id}/per-variant` with filters → `/runs/{id}/records/...` drilldown. Detail pane renders `waf_route.waf_headers` as a name→value table when present (Coraza rule IDs, shadowd threat classes, etc.) |
 | **Compare Runs** | `/runs/compare?a=&b=` — side-by-side delta, green/red color-coded |
 
 ## Dev

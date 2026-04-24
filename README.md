@@ -22,7 +22,7 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 | 6 | FastAPI (`--profile dashboard`) + Vite/React/TS/Tailwind dashboard | ✅ |
 | 7 | Real shadowd + open-appsec, expanded corpus (201 payloads, 12 classes), PL1↔PL4 compare, Hall of Fame, cross-WAF report + dashboard tab, open-appsec confidence-ladder ablation | ✅ |
 
-Parked items live in [TODO.md](TODO.md).
+[TODO.md](TODO.md) is currently empty — all parked items resolved. The shell recipes for the most recent additions live under `tests/shadowd_whitelist.sh` (whitelist-mode probe) and `scripts/with-nix-libs` (NixOS LD_LIBRARY_PATH wrapper).
 
 ---
 
@@ -33,8 +33,8 @@ Parked items live in [TODO.md](TODO.md).
 | WAF | How it blocks | Gotchas |
 |---|---|---|
 | **ModSecurity v3 + CRS 4.25** (`owasp/modsecurity-crs:4.25.0-nginx-alpine-202604040104`) | Libinjection + ~1000 CRS rules. `PARANOIA` env var tunes the PL. | `PARANOIA=N` in compose env for `modsec-ph-*` services **doesn't activate the JSON-SQL plugin rules** (942550 family) — those ship separately. So modsec-ph shows the SAME bypass rate as modsec on JSON-SQL payloads at every PL. The paranoia-ladder ablation (see Research findings) measures this: bypass rate stays **flat across PL1/2/3/4**, while Coraza (which flips the same knob via `setvar:tx.blocking_paranoia_level=N`) closes the gap from PL2 onwards. |
-| **Coraza** (`waflab/coraza:phase1`, built from `corazawaf/coraza/v3`) | Same CRS 4.25 rule set loaded via `coreruleset.FS`. | **CRITICAL:** `@coraza.conf-recommended` defaults to `SecRuleEngine DetectionOnly` — blocks nothing. We force `SecRuleEngine On` via `CORAZA_BLOCKING_MODE=on` (default). PL4 directive in compose (`SecAction ... tx.blocking_paranoia_level=4`) **does** activate JSON-SQL rules (unlike modsec-ph). |
-| **Shadow Daemon** (`zecure/shadowd:2.2.0`) | TCP :9115 analyser + 120 blacklist filters; verdict over HMAC-signed wire protocol. | Requires DB profile bootstrap. `MODE_ACTIVE=1`, `MODE_PASSIVE=2`, `MODE_LEARNING=3` — **lower number = stricter** (counterintuitive). `server_ip` column stored as `*` which `prepare_wildcard()` converts to SQL `%`; storing literal `%` gets escaped to `\%` and matches nothing. The proxy (`waflab/shadowd-proxy`) speaks the real wire protocol `profile_id\n hmac\n json\n`. 120-filter library is weaker than CRS — expected higher bypass rate. `SHADOWD_FALLBACK_BLOCK=false` by default (was a regex safety net before the daemon was properly wired). |
+| **Coraza** (`waflab/coraza:phase1`, built from `corazawaf/coraza/v3`) | Same CRS 4.25 rule set loaded via `coreruleset.FS`. | **CRITICAL:** `@coraza.conf-recommended` defaults to `SecRuleEngine DetectionOnly` — blocks nothing. We force `SecRuleEngine On` via `CORAZA_BLOCKING_MODE=on` (default). PL4 directive in compose (`SecAction ... tx.blocking_paranoia_level=4`) **does** activate JSON-SQL rules (unlike modsec-ph). Our proxy drives the Coraza transaction directly (not `corazahttp.WrapHandler`) so every block stamps `X-Coraza-Interrupt-Rule` + `X-Coraza-Rules-Matched` (attack-family rules only, range `[910000, 990000)` — init noise filtered). Surfaced to `VerdictRecord.waf_route.waf_headers` automatically. |
+| **Shadow Daemon** (`zecure/shadowd:2.2.0`) | TCP :9115 analyser + 120 blacklist filters; verdict over HMAC-signed wire protocol. | Requires DB profile bootstrap. `MODE_ACTIVE=1`, `MODE_PASSIVE=2`, `MODE_LEARNING=3` — **lower number = stricter** (counterintuitive). `server_ip` column stored as `*` which `prepare_wildcard()` converts to SQL `%`; storing literal `%` gets escaped to `\%` and matches nothing. The proxy (`waflab/shadowd-proxy`) speaks the real wire protocol `profile_id\n hmac\n json\n`. 120-filter library is weaker than CRS — expected higher bypass rate. `SHADOWD_FALLBACK_BLOCK=false` by default (was a regex safety net before the daemon was properly wired). **Opt-in whitelist experiment**: `make shadowd-whitelist` flips the profile to whitelist-mode with hand-crafted rules for DVWA SQLi (numeric `GET|id`, alphanumeric `GET|Submit`, Everything catch-all), probes benign vs attack, restores blacklist-only on exit. Integrity mode is out of scope — it's a language-level connector feature (PHP/Perl/Python) and can't be exercised through our reverse proxy. |
 | **open-appsec** (`ghcr.io/openappsec/agent-unified:latest`) | NGINX + ML attachment in one container, multiplexing all 3 `openappsec-*.local` Host headers via server blocks. | Standalone profile requires 4 sidecars: `openappsec-smartsync`, `openappsec-shared-storage`, `openappsec-tuning`, `openappsec-db` (Postgres **16**, not 18 — 18 moved the data dir). `local_policy.yaml` in `wafs/openappsec/localconfig/` sets `prevent-learn` + `minimum-confidence: critical`. Healthcheck probes `/healthz` which the nginx default_server handles *before* the agent attachment (agent takes 30-45 s to load policy). |
 
 ### Targets
@@ -48,6 +48,7 @@ Parked items live in [TODO.md](TODO.md).
 ### Engine (Python, `engine/src/wafeval/`)
 
 - **Per-route `httpx.AsyncClient`** — one client per (waf, target) route to avoid cookie jar leaks between routes. The old shared jar made DVWA session appear to work on WAF routes when actually only baseline authenticated.
+- **WAF-header fingerprint capture** — `_capture_waf_headers` (in `runner/engine.py`) extracts `x-*` response headers whose names contain `coraza|modsec|shadowd|waflab` and stores `{name: value}` on `RouteResult.waf_headers`. That's where Coraza's rule-ID stamps, Shadow Daemon's `x-shadowd-threats`, and the `x-waflab-waf` self-ID land, so the dashboard's Payload Explorer drilldown can answer "why was this blocked?" without a separate audit-log parse.
 - **Verdict classifier** (`runner/verdict.py`): baseline-first. If baseline didn't trigger, return `BASELINE_FAIL` regardless of what the WAF did — so denominators are comparable across WAFs. Hard 4xx/5xx+WAF-marker → `BLOCKED`; 2xx response with no exploit marker → `BLOCKED_SILENT` (silent-sanitise case, see Analyzer section for how it's surfaced); 5xx with exploit marker → `ALLOWED` (Juice Shop SQLITE_ERROR is a successful SQLi); 2xx with the marker → `ALLOWED` (or `FLAGGED` when the WAF stamped a detection header).
 - **Trigger model** — supports `contains`, `regex`, `reflected`, `status`, `any_of`. `any_of` lets one payload match against DVWA's "First name" *or* Juice Shop's SQLITE_ERROR so the corpus stays DRY.
 - **Context-displacement + multi_request mutators** — relocate payloads into HTTP headers. The `_header_safe()` helper percent-encodes control chars + non-ASCII so h11's field-value validation doesn't reject (SQLi `\n` payloads, Unicode-quote SQLi, etc.).
@@ -63,6 +64,7 @@ Parked items live in [TODO.md](TODO.md).
 - `waf_view` denominator excludes `baseline_fail + error` (it's "requests that actually tested the WAF", not "everything on disk").
 - Reporter renders `—` for cells where `n < 5` (Wilson CI > ±0.4 at that size is misleading).
 - Hall of Fame section (`reporter/hall_of_fame.py`) lists top-N variants by how many (waf × target) cells they bypass.
+- **Latency profile (Appendix B)** — `analyzer/latency.py` computes p50 / p95 / p99 of `waf_ms` per (waf, target) on non-baseline routes, excluding `error` and `baseline_fail` rows (those don't reflect real WAF processing cost). The Markdown reporter renders it right before the Bibliography; a long p99 tail correlates with ML-agent cold-cache or expensive regex backtracking.
 - **Three-way verdict split** (post-Phase-7): `BLOCKED` covers hard-deny signatures (403/406/501 or 5xx + WAF body marker); `BLOCKED_SILENT` covers the silent-sanitise case (2xx response, but the exploit marker that fired on baseline is absent — e.g. CRS's JSON-SQL rewrite or open-appsec's quiet strip); `ALLOWED` is the real bypass. Both block verdicts count as WAF wins in the denominator and never in the numerator; `per_payload.csv` / `/runs/{id}/per-payload` emit a separate `n_blocked_silent` tally, the dashboard VerdictBadge renders it teal, and the Hall of Fame includes silent blocks when computing the (waf × target) eligibility denominator.
 
 ### API / Dashboard (`--profile dashboard`)
@@ -104,7 +106,7 @@ Parked items live in [TODO.md](TODO.md).
 ### Host-OS gotchas (NixOS)
 
 - `make` is not in PATH. Use `nix-shell -p make --run "make <target>"` or call the underlying commands directly.
-- Python's numpy/pandas needs `libstdc++` + `zlib` via `nix-shell -p stdenv.cc.cc.lib zlib` with `LD_LIBRARY_PATH` set. The `tests/phase*.sh` scripts auto-reexec under nix-shell via `tests/_lib.sh`.
+- Python's numpy/pandas needs `libstdc++` + `zlib` on `LD_LIBRARY_PATH`. Centralised in [scripts/with-nix-libs](scripts/with-nix-libs) — every host-venv Makefile target (`test-engine`, `report-host`, `run-host`, `report-combined-host`, `ladder-host`, `api-host`) is prefixed with it, and `tests/_lib.sh` delegates to the same wrapper. No-op on non-NixOS hosts.
 
 ### Compose profiles gotcha
 
@@ -227,9 +229,10 @@ bash tests/phase4.sh   # 5 mutators × corpus minima
 bash tests/phase5.sh   # analyzer + reporter
 bash tests/phase6.sh   # FastAPI + dashboard
 bash tests/phase_paper.sh  # --corpus paper_subset + encoding≥lexical invariant
+bash tests/shadowd_whitelist.sh  # shadowd whitelist-mode PoC (needs `make up`)
 ```
 
-Engine unit tests (129 passing, post Phase-7):
+Engine unit tests (144 passing):
 
 ```bash
 nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-link '<nixpkgs>' -A stdenv.cc.cc.lib)/lib:\$(nix-build --no-out-link '<nixpkgs>' -A zlib)/lib:\$LD_LIBRARY_PATH engine/.venv/bin/python -m pytest engine/tests -q"
