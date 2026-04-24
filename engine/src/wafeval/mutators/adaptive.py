@@ -47,12 +47,47 @@ _COMPOSABLE_BASES: tuple[str, ...] = ("lexical", "encoding", "structural")
 _A_PER_PAIR = 3
 _B_PER_PAIR = 2
 
+# Per-triple caps. 6 permutations × _A × _B × _C upper bound per payload.
+# Tighter than the pair caps because the body size grows combinatorially
+# (encoding of encoding of encoding = URL-quad-encoded) and we want the
+# total variant budget per payload bounded to ~40 after dedup.
+_A_PER_TRIPLE = 2
+_B_PER_TRIPLE = 2
+_C_PER_TRIPLE = 1
+
 
 def _parse_env_int(name: str, default: int) -> int:
     try:
         return int(os.environ.get(name, str(default)))
     except ValueError:
         return default
+
+
+def _rate_by_mutator_from_seed(seed_run: str, results_root: str) -> dict[str, float] | None:
+    """Load per-mutator waf_view bypass rates from a prior run.
+
+    Returns None if the seed run is missing / empty / analyser deps
+    unavailable. Shared between pair-ranker and triple-ranker so both
+    rank off identical data.
+    """
+    # Late import so the mutator module load doesn't drag pandas in
+    # unless ranking is actually requested.
+    try:
+        from wafeval.analyzer.aggregate import load_run
+        from wafeval.analyzer.bypass import compute_rates
+    except Exception:  # pragma: no cover — optional dep path
+        return None
+
+    try:
+        df = load_run(Path(results_root), seed_run)
+    except (FileNotFoundError, ValueError):
+        return None
+    if df.empty:
+        return None
+
+    waf_only = df[df["waf"] != "baseline"]
+    rates = compute_rates(waf_only, ["mutator"], lens="waf_view")
+    return {row["mutator"]: row["rate"] for _, row in rates.iterrows()}
 
 
 @cache
@@ -65,31 +100,12 @@ def _rank_pairs(seed_run: str | None, results_root: str) -> list[tuple[str, str]
     available, so variant streams are deterministic across runs.
     """
     pairs = [(a, b) for a in _COMPOSABLE_BASES for b in _COMPOSABLE_BASES if a != b]
-
     if not seed_run:
         return pairs
 
-    # Late import so mutator module load doesn't drag pandas in unless
-    # ranking is actually requested.
-    try:
-        from wafeval.analyzer.aggregate import load_run
-        from wafeval.analyzer.bypass import compute_rates
-    except Exception:  # pragma: no cover — optional dep path
+    rate_by_mutator = _rate_by_mutator_from_seed(seed_run, results_root)
+    if not rate_by_mutator:
         return pairs
-
-    try:
-        df = load_run(Path(results_root), seed_run)
-    except (FileNotFoundError, ValueError):
-        return pairs
-
-    if df.empty:
-        return pairs
-
-    # Per-mutator bypass rate on non-baseline routes, waf_view lens —
-    # matches the denominator we'd care about when stacking transforms.
-    waf_only = df[df["waf"] != "baseline"]
-    rates = compute_rates(waf_only, ["mutator"], lens="waf_view")
-    rate_by_mutator = {row["mutator"]: row["rate"] for _, row in rates.iterrows()}
 
     def score(pair: tuple[str, str]) -> float:
         return rate_by_mutator.get(pair[0], 0.0) * rate_by_mutator.get(pair[1], 0.0)
@@ -97,6 +113,41 @@ def _rank_pairs(seed_run: str | None, results_root: str) -> list[tuple[str, str]
     # Sort descending by score; ties keep the fixed-order fallback so the
     # output is deterministic run-to-run.
     return sorted(pairs, key=lambda p: (-score(p), p))
+
+
+@cache
+def _rank_triples(
+    seed_run: str | None, results_root: str,
+) -> list[tuple[str, str, str]]:
+    """Return ordered (A, B, C) triples over distinct composable bases.
+
+    Cross-product over ``_COMPOSABLE_BASES`` with ``A != B != C != A``.
+    With three bases there are ``3! = 6`` permutations. Seed-ranked by
+    ``rate(A) × rate(B) × rate(C)`` when the seed run exists, with a
+    fixed lexicographic fallback.
+    """
+    triples = [
+        (a, b, c)
+        for a in _COMPOSABLE_BASES
+        for b in _COMPOSABLE_BASES
+        for c in _COMPOSABLE_BASES
+        if a != b and b != c and a != c
+    ]
+    if not seed_run:
+        return triples
+
+    rate_by_mutator = _rate_by_mutator_from_seed(seed_run, results_root)
+    if not rate_by_mutator:
+        return triples
+
+    def score(t: tuple[str, str, str]) -> float:
+        return (
+            rate_by_mutator.get(t[0], 0.0)
+            * rate_by_mutator.get(t[1], 0.0)
+            * rate_by_mutator.get(t[2], 0.0)
+        )
+
+    return sorted(triples, key=lambda t: (-score(t), t))
 
 
 @register
@@ -141,5 +192,72 @@ class AdaptiveMutator(Mutator):
                         complexity_rank=self.complexity_rank,
                         body=bv.body,
                     ))
+
+        return out
+
+
+@register
+class AdaptiveTripleMutator(Mutator):
+    """Compose THREE string-body base mutators; optionally seed-ranked.
+
+    Rank 7 — slots above ``AdaptiveMutator`` on the complexity ladder.
+    Enumerates ordered triples ``(A, B, C)`` over
+    ``{lexical, encoding, structural}`` where ``A != B != C != A`` (6
+    permutations). With ``ADAPTIVE_SEED_RUN`` set, orders the triples
+    by ``rate(A) × rate(B) × rate(C)`` so the most-likely-to-bypass
+    combinations come first; otherwise falls back to lexicographic
+    permutation order.
+
+    Per-slot variant caps (``_A_PER_TRIPLE``, ``_B_PER_TRIPLE``,
+    ``_C_PER_TRIPLE``) keep the per-payload variant count bounded to
+    ~40 after dedup — important because each composition layer can
+    expand the body size (URL-encode of URL-encode of …), so unbounded
+    fan-out here would blow up runtime.
+
+    ``ADAPTIVE_TOP_K_TRIPLES`` caps the triple count for faster
+    iteration; default is all 6.
+    """
+
+    category: ClassVar[str] = "adaptive3"
+    complexity_rank: ClassVar[int] = 7
+
+    def __init__(self) -> None:
+        self._seed_run = os.environ.get("ADAPTIVE_SEED_RUN") or None
+        self._results_root = os.environ.get("RESULTS_ROOT", "results/raw")
+        # 6 = 3! permutations of distinct elements from the three bases.
+        self._top_k = _parse_env_int("ADAPTIVE_TOP_K_TRIPLES", 6)
+
+    def mutate(self, payload: Payload) -> list[MutatedPayload]:
+        triples = _rank_triples(self._seed_run, self._results_root)[: max(1, self._top_k)]
+
+        out: list[MutatedPayload] = []
+        seen_bodies: set[str] = {payload.payload}
+
+        for a_name, b_name, c_name in triples:
+            a = REGISTRY[a_name]()
+            b = REGISTRY[b_name]()
+            c = REGISTRY[c_name]()
+
+            a_variants = [v for v in a.mutate(payload) if v.request_overrides is None][:_A_PER_TRIPLE]
+
+            for av in a_variants:
+                intermediate_ab = payload.model_copy(update={"payload": av.body})
+                b_variants = [v for v in b.mutate(intermediate_ab) if v.request_overrides is None][:_B_PER_TRIPLE]
+
+                for bv in b_variants:
+                    intermediate_bc = payload.model_copy(update={"payload": bv.body})
+                    c_variants = [v for v in c.mutate(intermediate_bc) if v.request_overrides is None][:_C_PER_TRIPLE]
+
+                    for cv in c_variants:
+                        if cv.body in seen_bodies:
+                            continue
+                        seen_bodies.add(cv.body)
+                        out.append(MutatedPayload(
+                            source_id=payload.id,
+                            variant=f"{a_name}>{av.variant}|{b_name}>{bv.variant}|{c_name}>{cv.variant}",
+                            mutator=self.category,
+                            complexity_rank=self.complexity_rank,
+                            body=cv.body,
+                        ))
 
         return out

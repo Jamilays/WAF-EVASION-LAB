@@ -119,7 +119,10 @@ def line_complexity(df: pd.DataFrame, out_dir: Path, target: str = "dvwa") -> li
     ax.set_ylim(0, 1)
     # Axis covers every registered mutator's complexity_rank. The base
     # five mutators are 1-5; the adaptive (compositional) mutator is 6.
-    ax.set_xticks(range(1, 7))
+    # Covers every registered mutator's complexity_rank — base five
+    # (1-5), adaptive pair (6), adaptive triple (7). Range is
+    # [1, 8) so ticks land on 1..7.
+    ax.set_xticks(range(1, 8))
     ax.set_xlabel("complexity rank")
     ax.set_ylabel("true-bypass rate")
     ax.set_title(f"Bypass rate vs obfuscation complexity ({target})")

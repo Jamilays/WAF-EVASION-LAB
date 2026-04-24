@@ -298,9 +298,14 @@ Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice 
 - Both WAFs at PL1: 0 % FPR, ~3.6 % bypass on lexical. So PL1 is the operationally sane default; PL4 on Coraza only pays off if the deployment can absorb total benign loss, which real deployments cannot.
 - Methodology note: ladder's built-in FPR overlay (`--fpr-steps`) joins a benign run per step onto the attack ladder, inverting the waf_view bypass rate (`1 − rate`) to get FPR. Wilson CIs flip symmetrically; CSVs grow a sibling `ladder-fpr.csv` so analysts can re-slice without recomputing.
 
-**Adaptive composition beats every single mutator** (smoke run `adaptive-smoke-20260423T123145Z`, seeded on `phase3-20260423T115006Z`):
+**Adaptive composition beats every single mutator** — headline run `adaptive-headline-20260424T134931Z` (seeded on the fresh `phase4-20260424T083836Z`, DVWA+Juice Shop, paper_subset SQLi+XSS, 4 WAFs):
 
-- ModSec v3 + CRS 4.25 on DVWA SQLi: **~40% true-bypass rate** (134 allowed / 335 eligible) when each variant stacks two base mutators. Single-category mutators against the same corpus top out at ~5% (encoding) on the same WAF. Double-URL-encoding + keyword casing (`encoding>url_double|lexical>alt_case_keywords`) is a representative winning pair — the first transform defeats CRS's decode, the second dodges the leftover signatures. Confirms the TODO's hypothesis: stacks reach where single categories can't.
+- **adaptive (rank 6, pair composer)** — pooled **44.4%** (n=504) across modsec/coraza/shadowd on DVWA. Per-WAF: modsec 29.2%, coraza 29.2%, **shadowd 75.0%**. Against the same corpus, the best single-category mutator (`encoding`) tops out at ~16% — a **2.7× lift** from stacking two transforms.
+- **adaptive3 (rank 7, triple composer)** — pooled **57.1%** (n=252). Per-WAF: modsec 38.1%, coraza 38.1%, **shadowd 95.2%** — near-total bypass. Each additional composition layer strictly increases bypass rate, matching the paper's complexity-monotonicity thesis.
+- Representative winning pair: `lexical>whitespace_inflate|structural>concat_keywords` — the whitespace trick defeats CRS's literal-match and the string-concat unwinds past libinjection's normaliser.
+- Reproduce via `make run-adaptive SEED_RUN=<research-run>`; multi-gen evolution via `make run-adaptive SEED_RUN=<…> ITER=3`. See [tests/adaptive_evolution.sh](tests/adaptive_evolution.sh).
+
+**Earlier pair-only smoke** `adaptive-smoke-20260423T123145Z` (modsec+DVWA, SQLi-only): ModSec + CRS 4.25 on DVWA SQLi — ~40% true-bypass rate (134/335) stacking two base mutators. Superseded by the 4-WAF headline above but preserved for traceability.
 
 ---
 

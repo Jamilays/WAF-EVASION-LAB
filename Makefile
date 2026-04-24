@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 COMPOSE := docker compose
 
-.PHONY: help up up-paranoia up-ml up-dashboard down down-all run run-host report report-combined report-combined-host report-host report-pdf ladder ladder-host ladder-openappsec ladder-paranoia shadowd-whitelist clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-engine logs ps curl-matrix build-engine build-dashboard api-host
+.PHONY: help up up-paranoia up-ml up-dashboard down down-all run run-host run-adaptive report report-combined report-combined-host report-host report-pdf ladder ladder-host ladder-openappsec ladder-paranoia shadowd-whitelist clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-engine logs ps curl-matrix build-engine build-dashboard api-host
 
 help:
 	@echo "WAF Evasion Lab — Make targets"
@@ -49,6 +49,10 @@ help:
 	@echo "  make shadowd-whitelist [CMD=enable|disable|probe|test]"
 	@echo "                     Exercise Shadow Daemon's whitelist engine with hand-"
 	@echo "                     crafted rules for DVWA SQLi (needs 'make up'; ~10s)"
+	@echo "  make run-adaptive SEED_RUN=<run-id> [ITER=N]"
+	@echo "                     Seed + run the adaptive (rank 6) + adaptive3 (rank 7)"
+	@echo "                     compositional mutators on the paper_subset corpus."
+	@echo "                     ITER=N wraps in an N-generation evolution loop."
 
 up:
 	$(COMPOSE) up -d --build --wait --wait-timeout 600 --remove-orphans
@@ -261,6 +265,52 @@ ladder-paranoia:
 # live stack. Always resets to blacklist-only on the way out.
 shadowd-whitelist:
 	bash tests/shadowd_whitelist.sh $(if $(CMD),$(CMD),test)
+
+# ---- adaptive-mutator headline run ----
+# Seeds the adaptive + adaptive3 compositional mutators (rank 6 + 7) on
+# an existing research run's per-mutator bypass rates, then re-runs the
+# corpus so the stacked-mutator bypass numbers are directly comparable
+# to the single-category baseline.
+#
+# Usage:
+#   make run-adaptive SEED_RUN=<run-id>              # one generation
+#   make run-adaptive SEED_RUN=<run-id> ITER=3       # 3-gen evolution
+#   make run-adaptive SEED_RUN=<run-id> ADAPTIVE_CORPUS=paper_subset
+#
+# ITER=N wraps this target in tests/adaptive_evolution.sh which reseeds
+# each generation on the previous generation's outcomes.
+ADAPTIVE_CORPUS          ?= paper_subset
+ADAPTIVE_CLASSES         ?= sqli,xss
+ADAPTIVE_TARGETS         ?= dvwa,juiceshop
+ADAPTIVE_WAFS            ?= baseline,modsec,coraza,shadowd
+ADAPTIVE_MUTATORS        ?= adaptive,adaptive3
+ADAPTIVE_MAX_CONCURRENCY ?= 4
+
+run-adaptive:
+	@if [ -z "$(SEED_RUN)" ]; then \
+	  echo "usage: make run-adaptive SEED_RUN=<run-id> [ITER=<n>] [ADAPTIVE_CORPUS=…] [ADAPTIVE_TARGETS=…]"; exit 2; \
+	fi
+	@if [ -n "$(ITER)" ] && [ "$(ITER)" != "1" ]; then \
+	  SEED_RUN=$(SEED_RUN) ITER=$(ITER) \
+	  ADAPTIVE_CORPUS=$(ADAPTIVE_CORPUS) ADAPTIVE_CLASSES=$(ADAPTIVE_CLASSES) \
+	  ADAPTIVE_TARGETS=$(ADAPTIVE_TARGETS) ADAPTIVE_WAFS=$(ADAPTIVE_WAFS) \
+	  ADAPTIVE_MUTATORS=$(ADAPTIVE_MUTATORS) \
+	  ADAPTIVE_MAX_CONCURRENCY=$(ADAPTIVE_MAX_CONCURRENCY) \
+	  bash tests/adaptive_evolution.sh; \
+	else \
+	  RUN_ID=adaptive-headline-$$(date -u +%Y%m%dT%H%M%SZ); \
+	  echo "[adaptive] seed=$(SEED_RUN) → run=$$RUN_ID"; \
+	  $(COMPOSE) --profile engine run --rm \
+	    -e ADAPTIVE_SEED_RUN=$(SEED_RUN) \
+	    -e MAX_CONCURRENCY=$(ADAPTIVE_MAX_CONCURRENCY) \
+	    engine run \
+	    --corpus $(ADAPTIVE_CORPUS) \
+	    --classes $(ADAPTIVE_CLASSES) \
+	    --targets $(ADAPTIVE_TARGETS) \
+	    --wafs $(ADAPTIVE_WAFS) \
+	    --mutators $(ADAPTIVE_MUTATORS) \
+	    --run-id $$RUN_ID; \
+	fi
 
 # ---- engine runner defaults ----
 CLASSES  ?= sqli,xss

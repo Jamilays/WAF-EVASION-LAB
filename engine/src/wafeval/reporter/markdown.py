@@ -27,7 +27,32 @@ from wafeval.reporter.hall_of_fame import hall_of_fame, render_markdown as rende
 
 
 _WAF_ORDER = ["modsec", "coraza", "shadowd"]
-_MUT_ORDER = ["lexical", "encoding", "structural", "context_displacement", "multi_request"]
+# Preferred rendering order for the headline table. Runs that only contain
+# compositional mutators (``make run-adaptive``) or any future rank
+# contribute extra rows appended in rank-then-alphabetical order by
+# ``_resolve_mut_order``. Keeping the base five up front matches the
+# paper's mutator-category ordering and the PAPER_TABLE1 reference keys.
+_PREFERRED_MUT_ORDER = [
+    "lexical", "encoding", "structural",
+    "context_displacement", "multi_request",
+    "adaptive", "adaptive3",
+    "noop",
+]
+
+
+def _resolve_mut_order(df: pd.DataFrame) -> list[str]:
+    """Order the mutators present in ``df`` for rendering.
+
+    Preferred names land first (in ``_PREFERRED_MUT_ORDER``); any
+    mutator the reporter hasn't heard of (a custom extension) comes
+    after them in alphabetical order. Absent mutators are skipped so
+    the table isn't padded with dashes for categories this run didn't
+    exercise.
+    """
+    present: set[str] = set(df["mutator"].unique()) if "mutator" in df.columns else set()
+    known = [m for m in _PREFERRED_MUT_ORDER if m in present]
+    extra = sorted(m for m in present if m not in _PREFERRED_MUT_ORDER)
+    return known + extra
 # Cells with fewer than this many baseline-triggered datapoints are rendered
 # as "—" with a footnote, not as a rate. Wilson CI half-widths are enormous
 # below ~5 samples and the cell just misleads the reader otherwise.
@@ -107,9 +132,10 @@ def _render_table1(df: pd.DataFrame, target: str) -> str:
         df[(df["target"] == target) & (df["waf"] != "baseline")],
         ["mutator"], lens="true_bypass",
     ).set_index("mutator")
+    mut_order = _resolve_mut_order(df[df["target"] == target])
     lines = [f"| Mutator | {' | '.join(_WAF_ORDER)} | Our pooled | Paper | Δ |",
              f"|---|{'|'.join(['---:'] * len(_WAF_ORDER))}|---:|---:|---:|"]
-    for mut in _MUT_ORDER:
+    for mut in mut_order:
         cells = []
         for waf in _WAF_ORDER:
             if (mut, waf) in p.index:
@@ -117,19 +143,20 @@ def _render_table1(df: pd.DataFrame, target: str) -> str:
                 cells.append(_fmt_rate(r["rate"], r["ci_lo"], r["ci_hi"], int(r["n"])))
             else:
                 cells.append("—")
+        paper = PAPER_TABLE1.get(mut)
+        paper_cell = f"{paper*100:.1f}%" if paper is not None else "—"
         if mut in pooled.index and int(pooled.loc[mut, "n"]) >= _MIN_N:
             pooled_rate = float(pooled.loc[mut, "rate"])
-            paper = PAPER_TABLE1[mut]
-            delta = pooled_rate - paper
+            delta_cell = f"{(pooled_rate - paper)*100:+.1f}pp" if paper is not None else "—"
             lines.append(
                 f"| `{mut}` | {' | '.join(cells)} | "
                 f"{pooled_rate*100:.1f}% (n={int(pooled.loc[mut, 'n'])}) | "
-                f"{paper*100:.1f}% | {delta*100:+.1f}pp |"
+                f"{paper_cell} | {delta_cell} |"
             )
         else:
             lines.append(
                 f"| `{mut}` | {' | '.join(cells)} | — | "
-                f"{PAPER_TABLE1[mut]*100:.1f}% | — |"
+                f"{paper_cell} | — |"
             )
     lines.append("")
     lines.append(f"*Cells with n < {_MIN_N} baseline-triggered datapoints are rendered as `—` "
@@ -170,11 +197,17 @@ def _recommendations(df: pd.DataFrame) -> str:
         ["mutator"], lens="true_bypass",
     ).set_index("mutator")
     bullets: list[str] = []
-    for mut in _MUT_ORDER:
+    for mut in _resolve_mut_order(df):
         if mut not in rates.index:
             continue
         r = rates.loc[mut, "rate"]
-        paper = PAPER_TABLE1[mut]
+        paper = PAPER_TABLE1.get(mut)
+        if paper is None:
+            bullets.append(
+                f"- **{mut}** — bypass rate {r*100:.1f}% "
+                f"(no paper baseline for this category)."
+            )
+            continue
         delta = r - paper
         if abs(delta) < 0.05:
             verdict = "reproduces the paper within ±5pp"
