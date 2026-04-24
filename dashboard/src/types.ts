@@ -92,6 +92,9 @@ export type RouteResult = {
   response_snippet: string | null;
   error: string | null;
   notes: string | null;
+  // WAF-identifying response headers captured by the engine (name → value).
+  // Records predating the schema change don't ship the key; treat as {}.
+  waf_headers?: Record<string, string>;
 };
 
 export type CompareRow = {

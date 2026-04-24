@@ -156,6 +156,21 @@ export default function PayloadExplorer({ runId }: { runId: string }) {
                 <pre className="bg-slate-900/60 border border-slate-800 rounded p-3 max-h-64 overflow-auto whitespace-pre-wrap break-all">
                   {detail.waf_route.response_snippet ?? detail.waf_route.error ?? ""}
                 </pre>
+                {detail.waf_route.waf_headers && Object.keys(detail.waf_route.waf_headers).length > 0 && (
+                  <div className="mt-2">
+                    <div className="text-slate-400 mb-1">waf headers</div>
+                    <table className="w-full text-[11px] border border-slate-800 rounded overflow-hidden">
+                      <tbody>
+                        {Object.entries(detail.waf_route.waf_headers).map(([k, v]) => (
+                          <tr key={k} className="border-t border-slate-800 first:border-t-0">
+                            <td className="px-2 py-1 text-slate-400 align-top whitespace-nowrap">{k}</td>
+                            <td className="px-2 py-1 text-slate-200 font-mono break-all">{v}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           </div>
