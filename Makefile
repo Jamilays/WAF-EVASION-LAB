@@ -1,7 +1,7 @@
 SHELL := /usr/bin/env bash
 COMPOSE := docker compose
 
-.PHONY: help up up-paranoia up-ml up-dashboard down down-all run run-host report report-combined report-combined-host report-host report-pdf ladder ladder-host ladder-openappsec ladder-paranoia clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-engine logs ps curl-matrix build-engine build-dashboard api-host
+.PHONY: help up up-paranoia up-ml up-dashboard down down-all run run-host report report-combined report-combined-host report-host report-pdf ladder ladder-host ladder-openappsec ladder-paranoia shadowd-whitelist clean reset-wafs shell-engine config test-phase1 test-phase2 test-phase3 test-phase4 test-phase5 test-phase6 test-engine logs ps curl-matrix build-engine build-dashboard api-host
 
 help:
 	@echo "WAF Evasion Lab — Make targets"
@@ -46,6 +46,9 @@ help:
 	@echo "  make ladder-paranoia"
 	@echo "                     Sweep CRS paranoia-level 1→2→3→4 on modsec-ph + coraza-ph"
 	@echo "                     (needs 'make up' + 'make up-paranoia'; ≈60 min for the full corpus)"
+	@echo "  make shadowd-whitelist [CMD=enable|disable|probe|test]"
+	@echo "                     Exercise Shadow Daemon's whitelist engine with hand-"
+	@echo "                     crafted rules for DVWA SQLi (needs 'make up'; ~10s)"
 
 up:
 	$(COMPOSE) up -d --build --wait --wait-timeout 600 --remove-orphans
@@ -249,6 +252,15 @@ ladder-openappsec:
 
 ladder-paranoia:
 	bash tests/paranoia_ladder.sh
+
+# ---- shadowd whitelist experiment (TODO #1) ----
+# Targets the daemon's ``whitelist`` engine (vs the default ``blacklist``
+# engine exercised by the main corpus). Hand-crafted rules for DVWA's
+# /vulnerabilities/sqli/ endpoint — numeric id, alphanumeric Submit,
+# wide-open catch-all elsewhere. ~10 seconds end-to-end against a
+# live stack. Always resets to blacklist-only on the way out.
+shadowd-whitelist:
+	bash tests/shadowd_whitelist.sh $(if $(CMD),$(CMD),test)
 
 # ---- engine runner defaults ----
 CLASSES  ?= sqli,xss

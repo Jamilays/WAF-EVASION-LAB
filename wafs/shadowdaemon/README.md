@@ -45,16 +45,20 @@ legitimate values (`curl/8.1.2`, session cookies) don't false-positive.
 Context-displacement mutators that relocate payloads into custom `X-*`
 headers are only caught by the real shadowd path.
 
-## Future work
+## Whitelist experiments (opt-in)
 
-Real shadowd integration (Phase 7 candidate):
+The default profile (see `init/bootstrap.sql`) is blacklist-only — that
+matches the 120-filter library the paper tested. Shadow Daemon's other
+two engines are exercisable via opt-in scripts that flip the profile
+without disturbing the headline research corpus:
 
-- Add a `shadowd-init` sidecar that runs on first boot to:
-  - Insert a `profiles` row with a known `hmac_key`, `mode=2`, `blacklist_enabled=1`
-  - Seed `blacklist_rules` with default OWASP-CRS-analogue entries so the
-    bundled `blacklist_filters` are actually consulted
-- Update `proxy.py` to compute `HMAC-SHA256(body, profile.hmac_key)` and
-  send `profile_id` + `hmac` on the wire
-- Once the real shadowd path is verified end-to-end, flip
-  `SHADOWD_FALLBACK_BLOCK=false` by default so the proxy is a pure
-  forwarding connector and every block is attributable to the daemon
+- **Whitelist** — `make shadowd-whitelist` (or `bash tests/shadowd_whitelist.sh`)
+  seeds a small hand-crafted rule set for DVWA's /vulnerabilities/sqli/
+  endpoint (`GET|id` must be numeric ≤10 digits, etc.), flips
+  `whitelist_enabled=1, blacklist_enabled=0`, runs benign vs. attack
+  probes, and restores the canonical blacklist-only profile on exit.
+  Hand-crafted rather than learned because the daemon's learning mode
+  *records* observed inputs for human review — it does not auto-promote
+  them to rules. See `init/whitelist-seed.sql` for the rule template.
+- **Integrity** (hash-based) — not yet wired. Would require per-request
+  canonical-form hashing and a rule set pinning known-good hashes.
