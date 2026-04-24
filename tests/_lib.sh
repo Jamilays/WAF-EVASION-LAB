@@ -1,12 +1,13 @@
 # Shared helpers for tests/phase*.sh. Source at the top of any phase script.
 
-# Re-exec under nix-shell with libstdc++ + libz on LD_LIBRARY_PATH when we're
-# on NixOS. No-op on other platforms. Idempotent (guarded by WAFLAB_TESTS_NIX).
+# Re-exec under scripts/with-nix-libs so numpy/pandas C-extensions inside
+# engine/.venv find libstdc++ + zlib on NixOS. No-op on other platforms.
+# Idempotent (guarded by WAFLAB_WITH_NIX_LIBS, which the wrapper sets).
 waflab_nix_reexec() {
-  if command -v nix-build >/dev/null 2>&1 && [[ -z "${WAFLAB_TESTS_NIX:-}" ]]; then
-    export WAFLAB_TESTS_NIX=1
+  if [[ -z "${WAFLAB_WITH_NIX_LIBS:-}" ]] && command -v nix-build >/dev/null 2>&1; then
     local script="$1"; shift
-    exec nix-shell -p stdenv.cc.cc.lib zlib \
-         --run "LD_LIBRARY_PATH=\$(nix-build --no-out-link '<nixpkgs>' -A stdenv.cc.cc.lib)/lib:\$(nix-build --no-out-link '<nixpkgs>' -A zlib)/lib:\$LD_LIBRARY_PATH bash '$script' $*"
+    local repo_root
+    repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+    exec "$repo_root/scripts/with-nix-libs" bash "$script" "$@"
   fi
 }

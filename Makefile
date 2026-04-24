@@ -121,7 +121,7 @@ test-engine:
 	   python3 -m venv engine/.venv && \
 	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
 	fi
-	engine/.venv/bin/python -m pytest engine/tests -q
+	./scripts/with-nix-libs engine/.venv/bin/python -m pytest engine/tests -q
 
 build-engine:
 	$(COMPOSE) --profile engine build engine
@@ -135,7 +135,7 @@ api-host:
 	   python3 -m venv engine/.venv && \
 	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
 	fi
-	API_HOST=127.0.0.1 API_PORT=$${API_PORT:-8001} engine/.venv/bin/python -m wafeval.api
+	API_HOST=127.0.0.1 API_PORT=$${API_PORT:-8001} ./scripts/with-nix-libs engine/.venv/bin/python -m wafeval.api
 
 curl-matrix:
 	@port=$${TRAEFIK_PORT:-8000}; \
@@ -162,7 +162,7 @@ run-host:
 	   python3 -m venv engine/.venv && \
 	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
 	fi
-	engine/.venv/bin/python -m wafeval run \
+	./scripts/with-nix-libs engine/.venv/bin/python -m wafeval run \
 	  --traefik-url http://127.0.0.1:$${TRAEFIK_PORT:-8000} \
 	  --classes $(CLASSES) --mutators $(MUTATORS) $(ENGINE_ARGS)
 
@@ -180,7 +180,7 @@ report-host:
 	   python3 -m venv engine/.venv && \
 	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
 	fi
-	engine/.venv/bin/python -m wafeval report $(if $(RUN_ID),--run-id $(RUN_ID))
+	./scripts/with-nix-libs engine/.venv/bin/python -m wafeval report $(if $(RUN_ID),--run-id $(RUN_ID))
 
 report-pdf:
 	@if [ -z "$(RUN_ID)" ]; then \
@@ -215,7 +215,7 @@ report-combined-host:
 	   python3 -m venv engine/.venv && \
 	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
 	fi
-	engine/.venv/bin/python -m wafeval report-combined \
+	./scripts/with-nix-libs engine/.venv/bin/python -m wafeval report-combined \
 	  --run-ids $(RUN_IDS) --out-id $(OUT_ID)
 
 # ---- ladder / ordered-ablation analyzer ----
@@ -241,7 +241,7 @@ ladder-host:
 	   python3 -m venv engine/.venv && \
 	   engine/.venv/bin/pip install -q -e 'engine/[dev]'; \
 	fi
-	engine/.venv/bin/python -m wafeval ladder \
+	./scripts/with-nix-libs engine/.venv/bin/python -m wafeval ladder \
 	  --steps $(STEPS) --target $(TARGET) --out-id $(LADDER_OUT_ID)
 
 ladder-openappsec:
