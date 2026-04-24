@@ -204,7 +204,13 @@ class RouteResult(BaseModel):
     response_bytes: int | None
     response_snippet: str | None   # first ~512 chars of body for forensic review
     error: str | None = None
-    notes: str | None = None       # comma-joined WAF-identifying headers, etc.
+    notes: str | None = None       # comma-joined WAF-identifying header NAMES (legacy — kept
+                                   # so verdict.classify's ``notes.split(",")`` check still works).
+    # Name → value for a curated allowlist of WAF-identifying response headers
+    # (``x-waflab-waf``, ``x-shadowd-threats``, etc). The ``notes`` field only
+    # captured names, losing the values; readers that want "which CRS rule
+    # family fired / which threat class shadowd detected" key off this dict.
+    waf_headers: dict[str, str] = Field(default_factory=dict)
 
 
 class VerdictRecord(BaseModel):

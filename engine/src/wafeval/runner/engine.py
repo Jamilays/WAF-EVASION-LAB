@@ -56,6 +56,27 @@ log = structlog.get_logger(__name__)
 _SNIPPET_BYTES_DEFAULT = 65536
 SNIPPET_BYTES = int(os.environ.get("RESPONSE_SNIPPET_BYTES", _SNIPPET_BYTES_DEFAULT))
 
+# Substrings that mark a response header as WAF-identifying. We match on
+# lowercased name so case-variants (X-Coraza-Status vs x-coraza-status) both
+# count. ``waflab`` covers the custom ``x-waflab-waf`` / ``x-waflab-verdict``
+# tags our coraza-proxy + shadowd-proxy emit.
+_WAF_HEADER_TAGS = ("coraza", "modsec", "shadowd", "waflab")
+
+
+def _capture_waf_headers(headers) -> tuple[list[str], dict[str, str]]:
+    """Return ``(names, name→value)`` for WAF-identifying response headers.
+
+    Only captures ``x-*`` headers whose name contains one of
+    ``_WAF_HEADER_TAGS``. Kept narrow to avoid dragging every ``x-frame-
+    options``/``x-content-type-options`` into forensic metadata.
+    """
+    names = [
+        h for h in headers
+        if h.lower().startswith("x-")
+        and any(tag in h.lower() for tag in _WAF_HEADER_TAGS)
+    ]
+    return names, {h: headers[h] for h in names}
+
 
 @dataclass
 class RunConfig:
@@ -177,9 +198,7 @@ async def _send_one(
     # for pathological responses.
     snippet = r.text[:SNIPPET_BYTES] if r.content else ""
     elapsed_ms = r.elapsed.total_seconds() * 1000.0
-    waf_hdrs = [h for h in r.headers if h.lower().startswith("x-") and (
-        "coraza" in h.lower() or "modsec" in h.lower() or "shadowd" in h.lower()
-    )]
+    waf_hdrs, waf_header_values = _capture_waf_headers(r.headers)
     updated_jar = dict(cookies or {})
     updated_jar.update(r.cookies)
     return RouteResult(
@@ -190,6 +209,7 @@ async def _send_one(
         response_snippet=snippet,
         error=None,
         notes=",".join(waf_hdrs) if waf_hdrs else None,
+        waf_headers=waf_header_values,
     ), updated_jar
 
 
