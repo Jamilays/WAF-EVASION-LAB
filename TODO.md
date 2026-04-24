@@ -18,11 +18,21 @@ whitelist rules from legit traffic, then running the corpus.
 
 ---
 
-### 2. Response-side fingerprinting
+### 2. Response-side rule-ID extraction
 
-Currently we record the WAF's response status + a snippet of the body.
-Richer fingerprinting (WAF name via `Server` header, rule IDs if
-ModSecurity logs them, latency distributions) would let the dashboard
-show *why* each WAF blocked. CRS logs rule IDs — we just need to parse
-them from the `debug` logs or lift them from the response body when the
-WAF echoes them.
+Response-header fingerprinting and latency profiles landed (see
+`RouteResult.waf_headers` + the markdown reporter's Appendix B). The
+remaining piece — which CRS rule IDs actually fired on a block — is
+harder because the upstream `owasp/modsecurity-crs:nginx-alpine` image
+returns a bare `403 Forbidden` HTML body with no rule IDs, and our
+Coraza Go proxy likewise drops matched-rule information after
+`WrapHandler` decides to deny.
+
+**Scope:**
+- ModSec: mount `SecAuditLog` from the container and tail-parse it to
+  correlate rule IDs back to each request (requires JSON audit log
+  format + a request-id correlation header).
+- Coraza: patch `wafs/coraza/main.go` to capture `tx.MatchedRules()` on
+  interrupt and stamp them into an `X-Coraza-Rules-Matched` header so
+  the engine's existing `waf_headers` capture surfaces them for free.
+- Needs a container rebuild + a light end-to-end smoke run to verify.

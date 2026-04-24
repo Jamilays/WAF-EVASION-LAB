@@ -21,6 +21,7 @@ from pathlib import Path
 import pandas as pd
 
 from wafeval.analyzer.bypass import compute_rates
+from wafeval.analyzer.latency import latency_stats, render_markdown_table as render_latency_md
 from wafeval.reporter._data import BIBLIOGRAPHY, MUTATOR_SECTIONS, PAPER_TABLE1
 from wafeval.reporter.hall_of_fame import hall_of_fame, render_markdown as render_hall_of_fame
 
@@ -134,6 +135,16 @@ def _render_table1(df: pd.DataFrame, target: str) -> str:
     lines.append(f"*Cells with n < {_MIN_N} baseline-triggered datapoints are rendered as `—` "
                  f"(Wilson CI half-width ≥ 0.4 at that size).*")
     return "\n".join(lines)
+
+
+def _render_latency(df: pd.DataFrame) -> str:
+    # Scope to non-baseline routes — baseline latencies belong to the target,
+    # not to a WAF, so mixing them dilutes the comparison.
+    stats = latency_stats(
+        df[df["waf"] != "baseline"] if "waf" in df.columns else df,
+        groupby=["waf", "target"],
+    )
+    return render_latency_md(stats)
 
 
 def _render_waf_view(df: pd.DataFrame) -> str:
@@ -278,6 +289,16 @@ WAF-view counts anything the WAF didn't block, irrespective of whether the
 transformed payload would have exploited the app sans-WAF.
 
 {_render_waf_view(df)}
+
+## Appendix B — Latency profile (WAF response ms)
+
+Per-(waf × target) percentiles over `waf_ms`, excluding `error` and
+`baseline_fail` rows (those don't reflect real WAF processing cost). A
+long p99 tail often signals rule chains with expensive backtracking or
+an ML-agent cold cache; compare with the bypass table above to see
+whether latency correlates with detection strength.
+
+{_render_latency(df)}
 
 ## Bibliography
 

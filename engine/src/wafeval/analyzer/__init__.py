@@ -12,5 +12,6 @@ Implements prompt.md §9. Two lenses (see ``bypass.compute_rates``):
 from wafeval.analyzer.aggregate import load_run
 from wafeval.analyzer.bypass import compute_rates, wilson_ci
 from wafeval.analyzer.export import write_csvs
+from wafeval.analyzer.latency import latency_stats
 
-__all__ = ["load_run", "compute_rates", "wilson_ci", "write_csvs"]
+__all__ = ["load_run", "compute_rates", "wilson_ci", "write_csvs", "latency_stats"]
