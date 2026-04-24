@@ -462,7 +462,25 @@ services:
       - ./wafs/openappsec/logs:/var/log/nano_agent
       - ./wafs/openappsec/localconfig:/ext/appsec
       - ./wafs/openappsec/nginx-config:/etc/nginx/conf.d
-    command: ["/cp-nano-agent"]
+    # Wrapper babysits nginx. The agent's nginx-attachment installer starts
+    # nginx during /cp-nano-agent bootstrap and then kills it during
+    # re-instrumentation; the cp-nano watchdog only supervises cp-nano-*
+    # services, not nginx itself, so the listener stays down and every route
+    # via Traefik returns 502. We give the agent ~90s to finish bootstrap,
+    # then watch /healthz and bring nginx back if it disappears.
+    command:
+      - /bin/bash
+      - -c
+      - |
+        /cp-nano-agent &
+        AGENT_PID=$$!
+        (
+          sleep 90
+          while sleep 10; do
+            wget -q -O /dev/null --timeout=2 http://127.0.0.1/healthz 2>/dev/null || nginx 2>/dev/null || true
+          done
+        ) &
+        wait $$AGENT_PID
     depends_on:
       dvwa-init: { condition: service_completed_successfully }
       webgoat:   { condition: service_healthy }
