@@ -337,7 +337,7 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for full detail. Developer onbo
 - DVWA / WebGoat / Juice Shop are intentionally vulnerable. Never expose them to the LAN.
 - DB passwords default to `*_dev_only`; rotate via `.env` if your disk leaves your machine.
 - The payload loader rejects destructive patterns (`DROP TABLE`, `rm -rf`, fork bombs, `/etc/shadow`). The multi_request mutator re-audits every generated step.
-- All image tags are pinned (no `latest` except DVWA, which has no versioned tags upstream, and the open-appsec images which track `latest` on ghcr.io).
+- Every external image in [docker-compose.yml](docker-compose.yml) is pinned to a SHA256 digest (`image: name:tag@sha256:<digest>` form), including the DVWA / open-appsec images that only ship a `:latest` tag upstream. Pulls reproduce byte-for-byte. To refresh a pin: `docker pull <name>:<tag> && docker image inspect <name>:<tag> --format '{{index .RepoDigests 0}}'`, swap the digest in compose.
 
 ---
 

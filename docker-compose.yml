@@ -22,7 +22,7 @@ volumes:
 
 # ---------- reusable anchors ----------
 x-modsec-common: &modsec-common
-  image: owasp/modsecurity-crs:4.25.0-nginx-alpine-202604040104
+  image: owasp/modsecurity-crs:4.25.0-nginx-alpine-202604040104@sha256:f7ebbff3739ad03cff3062537543129598f94ab304ed19b895e20ddf14e1e1da
   restart: unless-stopped
   networks: [waflab]
   healthcheck:
@@ -102,7 +102,7 @@ services:
   # Routing — single Traefik front door on 127.0.0.1:${TRAEFIK_PORT}
   # ============================================================================
   traefik:
-    image: traefik:v3.6.13
+    image: traefik:v3.6.13@sha256:34d5089d0b414945342848518b383f11f5b3a645504ed87b77ffeb9d683d0e48
     container_name: waflab-traefik
     restart: unless-stopped
     command: ["--configFile=/etc/traefik/traefik.yml"]
@@ -123,7 +123,7 @@ services:
   # Vulnerable targets
   # ============================================================================
   dvwa-db:
-    image: mysql:5.7.44
+    image: mysql:5.7.44@sha256:4bc6bc963e6d8443453676cae56536f4b8156d78bae03c0145cbe47c2aad73bb
     container_name: waflab-dvwa-db
     restart: unless-stopped
     environment:
@@ -142,7 +142,7 @@ services:
       retries: 20
 
   dvwa:
-    image: vulnerables/web-dvwa:latest
+    image: vulnerables/web-dvwa:latest@sha256:dae203fe11646a86937bf04db0079adef295f426da68a92b40e3b181f337daa7
     container_name: waflab-dvwa
     restart: unless-stopped
     depends_on:
@@ -160,7 +160,7 @@ services:
 
   # One-shot DVWA bootstrapper: creates DB schema + admin user. Idempotent.
   dvwa-init:
-    image: curlimages/curl:8.8.0
+    image: curlimages/curl:8.8.0@sha256:73e4d532ea62d7505c5865b517d3704966ffe916609bedc22af6833dc9969bcd
     container_name: waflab-dvwa-init
     depends_on:
       dvwa:
@@ -172,7 +172,7 @@ services:
     restart: "no"
 
   webgoat:
-    image: webgoat/webgoat:v2025.3
+    image: webgoat/webgoat:v2025.3@sha256:3101bd9e7bcfe122d7ef91e690ef3720de36cc4e86b3d06763a1ddf2e2751a4b
     container_name: waflab-webgoat
     restart: unless-stopped
     environment:
@@ -186,7 +186,7 @@ services:
       retries: 30
 
   juiceshop:
-    image: bkimminich/juice-shop:v19.2.1
+    image: bkimminich/juice-shop:v19.2.1@sha256:b3450d951d98b607805b21a4b9b4da7451b334c804ad93a79fcee490b3a7c5ad
     container_name: waflab-juiceshop
     restart: unless-stopped
     networks: [waflab]
@@ -204,7 +204,7 @@ services:
   # Shadow Daemon daemon + Postgres (shared across all shadowd-* proxies)
   # ============================================================================
   shadowd-db:
-    image: zecure/shadowd_database:12.4
+    image: zecure/shadowd_database:12.4@sha256:3d0c19d145cf62d0c48489ef708f1326a54cecd21d82ad37472512c1fcb5de17
     container_name: waflab-shadowd-db
     restart: unless-stopped
     environment:
@@ -222,7 +222,7 @@ services:
       retries: 10
 
   shadowd-init:
-    image: postgres:14-alpine
+    image: postgres:14-alpine@sha256:737a9ee1aa27ae45f69038e0be0415381469a2bd05af94122d830b4bb8c54fde
     container_name: waflab-shadowd-init
     depends_on:
       shadowd-db:
@@ -240,7 +240,7 @@ services:
     restart: "no"
 
   shadowd:
-    image: zecure/shadowd:2.2.0
+    image: zecure/shadowd:2.2.0@sha256:a7d72e9591e6bf8a81df8d18bb6d7660c358f47bde74f7f52d32c1bcfbd15914
     container_name: waflab-shadowd
     restart: unless-stopped
     depends_on:
@@ -443,7 +443,7 @@ services:
   # wafs/openappsec/localconfig/local_policy.yaml.
   # ============================================================================
   openappsec:
-    image: ghcr.io/openappsec/agent-unified:latest
+    image: ghcr.io/openappsec/agent-unified:latest@sha256:7ebf17a6ff0a95d48f9a183f58d1e0a1d724562504dfc5329dd777d581150bfb
     container_name: waflab-openappsec
     profiles: ["ml"]
     restart: unless-stopped
@@ -497,7 +497,7 @@ services:
   # Standalone sidecars — provide learning + tuning state so the agent
   # behaves like a centrally-managed deployment (minus the CheckPoint WebUI).
   openappsec-shared-storage:
-    image: ghcr.io/openappsec/smartsync-shared-files:latest
+    image: ghcr.io/openappsec/smartsync-shared-files:latest@sha256:5f9f242487962c73d84a4b01b8dcfa2879522be978e9738ac4246c2234e42827
     container_name: waflab-openappsec-shared-storage
     profiles: ["ml"]
     restart: unless-stopped
@@ -508,7 +508,7 @@ services:
       - ./wafs/openappsec/smartsync-storage:/db
 
   openappsec-smartsync:
-    image: ghcr.io/openappsec/smartsync:latest
+    image: ghcr.io/openappsec/smartsync:latest@sha256:480140c0ffc4948f9a2b7684073c4b8966f6539e289288d084fb5eb003e9ac0d
     container_name: waflab-openappsec-smartsync
     profiles: ["ml"]
     restart: unless-stopped
@@ -522,7 +522,7 @@ services:
     # Pinned to 16 because postgres:18+ reorganised /var/lib/postgresql
     # (the data subdir moves up a level); our bind-mount convention
     # matches 16's layout, and the tuning service doesn't require 18.
-    image: postgres:16-alpine
+    image: postgres:16-alpine@sha256:93d55776e04376e19adb2733e3ccebb4392ee7dd86d8ff238503b30fe719c84f
     container_name: waflab-openappsec-db
     profiles: ["ml"]
     restart: unless-stopped
@@ -540,7 +540,7 @@ services:
       retries: 10
 
   openappsec-tuning:
-    image: ghcr.io/openappsec/smartsync-tuning:latest
+    image: ghcr.io/openappsec/smartsync-tuning:latest@sha256:279024130e7431bb8e3bd38e985b014e8c082718a18f38d8145e94d2a20604e4
     container_name: waflab-openappsec-tuning
     profiles: ["ml"]
     restart: unless-stopped
@@ -621,7 +621,7 @@ services:
       - "--reports-dir=/results/reports"
 
   latex:
-    image: texlive/texlive:TL2024-historic
+    image: texlive/texlive:TL2024-historic@sha256:15d417a242e26d8e7a6b5273d94fd372194059104b9828820b74ff22db36e873
     container_name: waflab-latex
     profiles: ["report"]
     networks: [waflab]
