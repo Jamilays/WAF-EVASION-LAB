@@ -60,5 +60,14 @@ without disturbing the headline research corpus:
   Hand-crafted rather than learned because the daemon's learning mode
   *records* observed inputs for human review — it does not auto-promote
   them to rules. See `init/whitelist-seed.sql` for the rule template.
-- **Integrity** (hash-based) — not yet wired. Would require per-request
-  canonical-form hashing and a rule set pinning known-good hashes.
+- **Integrity** (hash-based) — *not a reverse-proxy feature*. Shadow
+  Daemon's integrity engine is for detecting web-app source-code
+  tamper: the language-level connectors (PHP / Perl / Python) hash
+  application files at startup and ship those digests with every
+  request. The lab runs shadowd behind a language-agnostic HTTP proxy
+  (`wafs/shadowdaemon/proxy/proxy.py`) which has no application source
+  to hash — `"hashes": {}` ships empty, and there's no meaningful way
+  to exercise the engine without dropping one of the language
+  connectors into the vulnerable targets themselves (DVWA's PHP,
+  WebGoat's Java — the latter has no upstream connector). Out of scope
+  for the current research harness.

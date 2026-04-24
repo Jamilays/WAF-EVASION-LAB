@@ -5,28 +5,7 @@ in rough priority order (top = most valuable-per-hour, bottom = largest).
 
 ---
 
-### 1. Real shadowd integrity experiments
-
-Shadow Daemon has three engines: blacklist (our default), whitelist
-(now exercisable via `make shadowd-whitelist` — see
-`wafs/shadowdaemon/README.md`), and integrity (hash-based, still not
-wired). The integrity engine pins known-good canonical-form hashes per
-(path, caller) and blocks anything that deviates — a fundamentally
-different threat model to "block attack signatures" or "allow-list
-input shape".
-
-**Scope:**
-- Seed `integrity_rules` + `hashes` with canonical baselines for a
-  representative set of DVWA / Juice Shop / WebGoat endpoints.
-- Parallel opt-in switch script (`tests/shadowd_integrity.sh`) that
-  flips `integrity_enabled=1`, probes benign-vs-tampered, restores.
-- Open question: how does the lab generate a realistic canonical-form
-  corpus without re-implementing shadowd's hashing? Likely: run a
-  learning-mode probe, snapshot the `hashes` table, promote to rules.
-
----
-
-### 2. Response-side rule-ID extraction
+### 1. Response-side rule-ID extraction
 
 Response-header fingerprinting and latency profiles landed (see
 `RouteResult.waf_headers` + the markdown reporter's Appendix B). The
