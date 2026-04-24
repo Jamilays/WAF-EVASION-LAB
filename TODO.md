@@ -64,19 +64,11 @@ Verify: the combined report's cell tooltips now include
 via waf_headers). Add the combined report dir to the README's State of
 the World section.
 
-### 4. Deterministic payload ordering + environment capture
-
-- `--seed <int>` CLI flag on `wafeval run` that seeds Python's
-  `random` for any shuffling; record the seed in `manifest.json`.
-- Capture `docker version`, `uname -a`, CPU model, RAM, Docker image
-  digests in `manifest.json` on every run. Makes cross-machine
-  comparisons robust.
-
 ---
 
 ## P1 — high impact, medium scope
 
-### 5. Modern bypass techniques the corpus is missing
+### 4. Modern bypass techniques the corpus is missing
 
 The current corpus is dominated by CRS 3.x-era vectors that libinjection
 catches trivially. Add a new `payloads/smuggling.yaml` (and as-needed
@@ -97,7 +89,7 @@ mutator extensions):
 - Prototype pollution on Juice Shop (Node-specific class absent from
   the corpus).
 
-### 6. Statistical rigor for write-up
+### 5. Statistical rigor for write-up
 
 Currently we emit Wilson CIs and nothing else. For a publishable paper:
 
@@ -113,7 +105,7 @@ Currently we emit Wilson CIs and nothing else. For a publishable paper:
 Analyzer module: `engine/src/wafeval/analyzer/stats.py`. Reporter
 appendix: Appendix C — Statistical tests.
 
-### 7. Payload templating / bytecode fuzzing
+### 6. Payload templating / bytecode fuzzing
 
 Current corpus is fixed strings. Introduce templates with holes:
 
@@ -128,7 +120,7 @@ handwriting new payloads. Also ships the primitive for an AFL-style
 byte-level mutator that does random splicing within an attack-safe
 envelope.
 
-### 8. Genetic / reinforcement-learning mutator
+### 7. Genetic / reinforcement-learning mutator
 
 The adaptive mutator's seed-ranked pairs are a step 1. A proper GA:
 
@@ -147,7 +139,7 @@ loop that the current `RunConfig` doesn't expose.
 
 ## P2 — medium impact, medium scope
 
-### 9. Per-payload drilldown in dashboard
+### 8. Per-payload drilldown in dashboard
 
 Payload Explorer currently filters + drills into one record. Missing:
 
@@ -158,7 +150,7 @@ Payload Explorer currently filters + drills into one record. Missing:
 - "Show every WAF's response for this variant" side-by-side (4-WAF
   cross-comparison at the record level).
 
-### 10. Rule-ID aggregation dashboard tab
+### 9. Rule-ID aggregation dashboard tab
 
 Coraza now emits rule IDs on every block. The dashboard should
 aggregate:
@@ -169,13 +161,13 @@ aggregate:
 - Per-rule bypass-vs-catch breakdown (payloads that matched the same
   rule but one was allowed vs. blocked — surfaces rule-logic gaps).
 
-### 11. Request/response timeline chart
+### 10. Request/response timeline chart
 
 Scatter plot: x = variant, y = latency, colour = verdict. Surfaces
 timing-side-channel patterns at a glance. Lives on a new dashboard
 tab or as a figure in the Markdown report.
 
-### 12. Response-phase exploits
+### 11. Response-phase exploits
 
 - Timing oracle: build a latency-harness that measures response ms
   across a pool of timing-based SQLi payloads, distinguishes
@@ -189,7 +181,7 @@ tab or as a figure in the Markdown report.
 
 ## P3 — larger scope / research extensions
 
-### 13. More WAFs
+### 12. More WAFs
 
 - **NAXSI** — nginx module, signature-based but with allowlist mode.
   Architecturally distinct from CRS; interesting foil.
@@ -201,7 +193,7 @@ tab or as a figure in the Markdown report.
 - Commercial trials via API (different legal footing, separate tier):
   Cloudflare free tier, AWS WAF free rules.
 
-### 14. Longitudinal regression study
+### 13. Longitudinal regression study
 
 Run the full corpus quarterly against pinned WAF image tags. Plot
 bypass rate over CRS versions (4.0 → 4.5 → 4.10 → 4.25 → …). Needs:
@@ -211,7 +203,7 @@ bypass rate over CRS versions (4.0 → 4.5 → 4.10 → 4.25 → …). Needs:
 - `results/longitudinal/` tree tracked by DVC.
 - A new analyzer module that plots bypass rate vs. CRS release date.
 
-### 15. Coraza rule-ID parity via audit-log for ModSec
+### 14. Coraza rule-ID parity via audit-log for ModSec
 
 Coraza emits rule IDs via the custom `X-Coraza-Rules-Matched` header.
 ModSec's upstream nginx image doesn't expose equivalent metadata. To
@@ -225,7 +217,7 @@ reach parity:
 - Alternative: fork the modsecurity-crs image to emit rule IDs
   directly in response headers (bigger blast radius).
 
-### 16. Coraza response-phase (CRS phase 3/4) processing
+### 15. Coraza response-phase (CRS phase 3/4) processing
 
 `wrapWAFWithRuleIDs` in `wafs/coraza/main.go` currently skips the
 response-phase interceptor that upstream `corazahttp.WrapHandler`
@@ -235,7 +227,7 @@ interceptor across or rethink: most CRS attack-rules are request-side,
 so this is cosmetic today, but it's a correctness gap in the
 "Coraza matches ModSec behaviour" story.
 
-### 17. Shadowd canonical-baseline whitelist from learning-mode
+### 16. Shadowd canonical-baseline whitelist from learning-mode
 
 `tests/shadowd_whitelist.sh` uses hand-crafted whitelist rules for one
 DVWA endpoint. Broaden:
@@ -248,7 +240,7 @@ DVWA endpoint. Broaden:
 - Run the full corpus against the learned ruleset; compare bypass rate
   against hand-crafted ruleset and against pure-blacklist.
 
-### 18. Research-ergonomics: results/canonical/ under DVC
+### 17. Research-ergonomics: results/canonical/ under DVC
 
 Headline runs that back the paper deserve versioning.
 `results/raw/` stays untracked (big); but the 3-4 runs that underpin
@@ -259,13 +251,13 @@ bit-reproducible.
 
 ## P4 — developer experience
 
-### 19. Dashboard export-to-CSV
+### 18. Dashboard export-to-CSV
 
 Buttons on Results / Hall of Fame / Cross-WAF tabs to download the
 current view as CSV. Enables reviewers to load the data into their own
 tools without learning the API.
 
-### 20. Engine-image-rebuild reminder
+### 19. Engine-image-rebuild reminder
 
 Already called out in README ("⚠ Rebuild the engine image after
 editing `targets.yaml` or any payload YAML") but not enforced. Simple

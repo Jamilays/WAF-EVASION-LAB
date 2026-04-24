@@ -57,6 +57,12 @@ def _build_parser() -> argparse.ArgumentParser:
     r.add_argument("--timeout", type=float, default=float(os.environ.get("REQUEST_TIMEOUT_S", "30")))
     r.add_argument("--results-root", type=Path, default=Path(os.environ.get("RESULTS_ROOT", "results/raw")))
     r.add_argument("--run-id", default=None)
+    r.add_argument(
+        "--seed", type=int, default=None,
+        help="seed Python's `random` at run start; recorded in manifest.json "
+             "so any future randomised flow (sampling, GA mutator, tiebreaks) "
+             "reproduces on rerun",
+    )
 
     rep = sub.add_parser("report", help="Regenerate analyzer outputs + Markdown/LaTeX report")
     rep.add_argument("--run-id", default=None, help="run id under results/raw (default: latest)")
@@ -144,6 +150,7 @@ def main(argv: list[str] | None = None) -> int:
             results_root=args.results_root,
             run_id=args.run_id,
             corpus=args.corpus,
+            seed=args.seed,
         )
         run_id = anyio.run(run, cfg)
         print(f"run_id={run_id} results={args.results_root / run_id}")

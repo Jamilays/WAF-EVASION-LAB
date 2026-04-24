@@ -57,6 +57,7 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 - **Request timeout** — default 30s (was 15s). DVWA cmdi's 4s ping × PHP-FPM worker queue was timing out at 15s under MAX_CONCURRENCY=10; 30s + concurrency=4 fixes it cleanly.
 - **YAML package-data** — `pyproject.toml` has `[tool.hatch.build.targets.wheel.force-include]` for every `payloads/*.yaml` and `targets.yaml`. Without this, wheel-installed package loses the corpus.
 - **⚠ Rebuild the engine image after editing `targets.yaml` or any payload YAML** — `docker compose --profile engine run --rm engine ...` uses the built image, so stale image = stale routes. Confirmed bug: the first Phase-7 run used the old image because `docker compose build engine` was kicked off concurrently with the run.
+- **Reproducibility metadata in `manifest.json`** — every run records `seed` (null unless `--seed <int>` was passed — the forcing function for any future randomised flow) + `environment` (platform, cpu model, cpu count, memory, python version, wafeval version, docker version when available). Captured by `runner/environment.py` at run start; all fields are best-effort so the same code works on host venv + inside the container (docker CLI absent → field omitted, not fatal). Lets cross-machine runs be correlated after the fact: "this bypass rate came from a run on kernel X with CPU Y on Python Z."
 
 ### Analyzer / Reporter (`engine/src/wafeval/{analyzer,reporter}/`)
 

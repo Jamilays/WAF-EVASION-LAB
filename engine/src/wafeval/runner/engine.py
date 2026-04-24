@@ -23,6 +23,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 from contextlib import AsyncExitStack
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -45,6 +46,7 @@ from wafeval.models import (
 )
 from wafeval.mutators.base import REGISTRY
 from wafeval.payloads.loader import load_corpus
+from wafeval.runner.environment import capture_environment
 from wafeval.runner.session import DEFAULT_USER_AGENT, login_dvwa, login_webgoat
 from wafeval.runner.verdict import classify
 
@@ -99,6 +101,13 @@ class RunConfig:
     # ``payloads/<corpus>.yaml`` verbatim instead of the per-class split.
     # Used for the paper-replication subset.
     corpus: str | None = None
+    # Optional seed for Python's ``random`` module. Recorded in
+    # ``manifest.json`` so a rerun with the same seed produces the same
+    # ordering for any future randomised step (sampling, GA mutator,
+    # adaptive-pair tiebreaks). No-op today for the five base mutators
+    # which are deterministic, but the field is the forcing function for
+    # every future randomised flow to honour it.
+    seed: int | None = None
 
 
 def _new_run_id() -> str:
@@ -353,7 +362,15 @@ async def _process_variant(
 async def run(cfg: RunConfig) -> str:
     """Execute one full run. Returns the run_id."""
     run_id = cfg.run_id or _new_run_id()
-    log.info("run.start", run_id=run_id, mutators=cfg.mutators, classes=[c.value for c in cfg.classes])
+    if cfg.seed is not None:
+        random.seed(cfg.seed)
+    log.info(
+        "run.start",
+        run_id=run_id,
+        mutators=cfg.mutators,
+        classes=[c.value for c in cfg.classes],
+        seed=cfg.seed,
+    )
 
     # 1. Load + filter corpus + mutators
     corpus = load_corpus(classes=cfg.classes, corpus_name=cfg.corpus)
@@ -434,6 +451,8 @@ async def run(cfg: RunConfig) -> str:
         "classes": [c.value for c in cfg.classes],
         "routes": [r.model_dump() for r in routes],
         "totals": {"datapoints": len(verdicts), **counts},
+        "seed": cfg.seed,
+        "environment": capture_environment(),
     }
     manifest_path = cfg.results_root / run_id / "manifest.json"
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
