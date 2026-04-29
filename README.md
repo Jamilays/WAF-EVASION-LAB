@@ -10,7 +10,7 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 
 ## Status
 
-**Phase 7 complete.** All four WAFs legitimately enforcing, 201-payload corpus across 12 vuln classes, engine + analyzer + reporter + dashboard all green, paranoia-high comparison captured, open-appsec ML agent wired in for real, combined 4-WAF cross-run report + Cross-WAF dashboard tab shipped, and the open-appsec `minimum-confidence` ladder ablation now has full 4-level data.
+**Phase 7+ complete (2026-04-29 session).** All four WAFs legitimately enforcing, **297-payload corpus** across 12 vuln classes (up from 201), full SSTI + XXE coverage, consolidated headline reporter that fuses attack + adaptive + benign runs into a single rich Markdown report, and a complete academic paper (Markdown + PDF) at [RESEARCH/paper-yusifova-2026/](RESEARCH/paper-yusifova-2026/). The same folder also holds the AZTU 2026 conference deliverables — a 19-slide [presentation.pptx](RESEARCH/paper-yusifova-2026/presentation.pptx) (and PDF export) and a 5-minute [speech.md](RESEARCH/paper-yusifova-2026/speech.md) script — all built by the reproducible `pptxgenjs` toolchain in [RESEARCH/build/](RESEARCH/build/).
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -21,8 +21,9 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 | 5 | Analyzer + Markdown/LaTeX reporter | ✅ |
 | 6 | FastAPI (`--profile dashboard`) + Vite/React/TS/Tailwind dashboard | ✅ |
 | 7 | Real shadowd + open-appsec, expanded corpus (201 payloads, 12 classes), PL1↔PL4 compare, Hall of Fame, cross-WAF report + dashboard tab, open-appsec confidence-ladder ablation | ✅ |
+| 7+ | **Corpus expansion (8 thin classes 10-15 → 25 each), SSTI + XXE sinks added (DVWA + Juice Shop), graphql Juice Shop sink fix, cmdi/lfi DVWA trigger overrides, consolidated `report-headline` reporter (`wafeval report-headline`), `analyzer/paranoia.py` single-run PL1↔PL4 pivot, deduped Hall of Fame, `/runs/{id}/live` incremental cache, academic paper rendered to PDF.** | ✅ |
 
-[TODO.md](TODO.md) is currently empty — all parked items resolved. The shell recipes for the most recent additions live under `tests/shadowd_whitelist.sh` (whitelist-mode probe) and `scripts/with-nix-libs` (NixOS LD_LIBRARY_PATH wrapper).
+[TODO.md](TODO.md) tracks the remaining research roadmap (P1–P4 items). Items P0.1 (FPR-as-first-class-column) and P0.2 (fresh 4-WAF combined run) shipped this session as the consolidated headline reporter + the `headline-v2-20260429` artefact; P1.3 (modern bypass techniques) was partially addressed via the corpus expansion.
 
 ---
 
@@ -58,15 +59,18 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 - **YAML package-data** — `pyproject.toml` has `[tool.hatch.build.targets.wheel.force-include]` for every `payloads/*.yaml` and `targets.yaml`. Without this, wheel-installed package loses the corpus.
 - **⚠ Rebuild the engine image after editing `targets.yaml` or any payload YAML** — `docker compose --profile engine run --rm engine ...` uses the built image, so stale image = stale routes. Confirmed bug: the first Phase-7 run used the old image because `docker compose build engine` was kicked off concurrently with the run.
 - **Reproducibility metadata in `manifest.json`** — every run records `seed` (null unless `--seed <int>` was passed — the forcing function for any future randomised flow) + `environment` (platform, cpu model, cpu count, memory, python version, wafeval version, docker version when available). Captured by `runner/environment.py` at run start; all fields are best-effort so the same code works on host venv + inside the container (docker CLI absent → field omitted, not fatal). Lets cross-machine runs be correlated after the fact: "this bypass rate came from a run on kernel X with CPU Y on Python Z."
+- **`targets.yaml` post-Phase-7+ additions** — SSTI and XXE sinks are now wired on **DVWA** (routed through `/vulnerabilities/xss_r/` reflective sink) and **Juice Shop** (routed through `/rest/products/search`) with a per-endpoint `trigger: { kind: status, code: 200 }`. The lab can't *exploit* template-injection or XML-entity flaws (no Jinja, Twig, or XML parser in the stack), but the WAFs get to inspect the syntax on the wire — same convention as the other WAF-view-only classes. Cmdi and lfi on DVWA also got a `status: 200` trigger override because the per-payload regexes (`uid=\d+`, `root:`) had 83% / 94% baseline_fail under the previous regime: brace-expansion / `${IFS}` payloads expand differently under DVWA's `/bin/sh` (no bash), and DVWA has `open_basedir` set so relative `../`-traversals don't actually leak `/etc/passwd` even at security=low. graphql on Juice Shop was switched from `POST/form` (100% baseline_fail) to `GET/query` because `/rest/products/search` only accepts GET. Net effect: every class now produces meaningful baseline-eligible rows on every target where it's listed.
 
 ### Analyzer / Reporter (`engine/src/wafeval/{analyzer,reporter}/`)
 
 - Two lenses: `true_bypass` (paper methodology, DVWA anchor, baseline-confirmed only) and `waf_view` (baseline-agnostic, used for Juice Shop where triggers vary per payload).
 - `waf_view` denominator excludes `baseline_fail + error` (it's "requests that actually tested the WAF", not "everything on disk").
 - Reporter renders `—` for cells where `n < 5` (Wilson CI > ±0.4 at that size is misleading).
-- Hall of Fame section (`reporter/hall_of_fame.py`) lists top-N variants by how many (waf × target) cells they bypass.
+- Hall of Fame section (`reporter/hall_of_fame.py`) lists top-N variants by how many (waf × target) cells they bypass. **Post-Phase-7+ adds `dedup_by_payload=True`** which collapses near-duplicate variants of the same payload into one leader row — used by the consolidated headline reporter so the gallery shows 15 distinct payloads, not 11 variants of `admin'-- -`.
 - **Latency profile (Appendix B)** — `analyzer/latency.py` computes p50 / p95 / p99 of `waf_ms` per (waf, target) on non-baseline routes, excluding `error` and `baseline_fail` rows (those don't reflect real WAF processing cost). The Markdown reporter renders it right before the Bibliography; a long p99 tail correlates with ML-agent cold-cache or expensive regex backtracking.
 - **Three-way verdict split** (post-Phase-7): `BLOCKED` covers hard-deny signatures (403/406/501 or 5xx + WAF body marker); `BLOCKED_SILENT` covers the silent-sanitise case (2xx response, but the exploit marker that fired on baseline is absent — e.g. CRS's JSON-SQL rewrite or open-appsec's quiet strip); `ALLOWED` is the real bypass. Both block verdicts count as WAF wins in the denominator and never in the numerator; `per_payload.csv` / `/runs/{id}/per-payload` emit a separate `n_blocked_silent` tally, the dashboard VerdictBadge renders it teal, and the Hall of Fame includes silent blocks when computing the (waf × target) eligibility denominator.
+- **Single-run paranoia ablation** (`analyzer/paranoia.py`, post-Phase-7+) — pivots a DataFrame containing both PL1 and PL4 variants (e.g. `modsec` + `modsec-ph`) into a side-by-side `(family, mutator) → rate_pl1, rate_pl4, delta_pp` table. The single-run analogue of `analyzer.ladder` — the ladder module needs one run-id per ablation step, but the headline scan deliberately includes both PL levels in the same run, so the pivot happens in-frame instead. The consolidated headline reporter calls this to render section 5.
+- **Generalised chart helpers** (`analyzer/charts.py`, post-Phase-7+) — every chart now takes a `lens=` parameter (defaults to `true_bypass` for back-compat with the per-run reporter) and intersects `_WAF_ORDER` / `_MUTATOR_ORDER` with the WAFs / mutators actually present in the input. New chart types: `pooled_waf_target_heatmap`, `latency_vs_bypass_scatter`, `waf_class_heatmap`. Output filenames now include the target and lens (`heatmap_mutator_waf_juiceshop_waf_view.png` etc.) so per-run and consolidated reports can coexist in the same `figures/` tree.
 
 ### API / Dashboard (`--profile dashboard`)
 
@@ -82,6 +86,14 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 - The headline table has one column per WAF present across the merged runs, ordered `modsec, coraza, shadowd, openappsec, modsec-ph, coraza-ph, <unknowns alphabetical>`. DVWA is the true-bypass anchor; an Appendix lists waf-view rates across every target.
 - Shortcut: `make report-combined RUN_IDS=a,b,c [OUT_ID=combined]` (containerised) / `make report-combined-host RUN_IDS=a,b,c` (host venv).
 - `results/reports/combined-phase7/` is the headline 4-WAF comparison shipped in Phase 7 (merges `research-20260421T141410Z` + `paranoia-high-20260421T151636Z` + `openappsec-20260421T162710Z`).
+
+### Consolidated headline reporter (post-Phase-7+)
+
+- `wafeval report-headline --attack-run-id <a> --adaptive-run-id <b> --benign-run-id <c> --out-id headline-<date>` fuses up to three input runs into a single 11-section Markdown report at `results/reports/<out-id>/report-headline.md` plus seven figures under `results/figures/<out-id>/`. Adaptive and benign run-ids are optional — the report degrades gracefully when either is absent.
+- Sections, in order: provenance · pooled WAF×target heatmap · attack-vs-FPR table (block-attack ÷ block-benign ratio per WAF) · Table 1 (mutator × WAF, anchored on Juice Shop because DVWA collapses to 0% across the board) · compositional uplift (per-target so the dilution that hides the lift in cross-target pooling doesn't wash it out) · paranoia ablation (PL1 vs PL4 from the same run, via `analyzer/paranoia.py`) · WAF×class heatmap · latency-vs-bypass scatter · deduped Hall of Fame · waf_view appendix · latency appendix · bibliography.
+- Unlike `report-combined`, this reporter **does not dedup by WAF** — it expects the input runs to be disjoint in (waf, mutator) space (the attack run owns the base mutators, the adaptive run owns rank-6/7, the benign run owns `noop`). Concatenation is therefore safe.
+- Currently host-venv-only (the `consolidated.py` reporter is on the local code path, not in `waflab/engine:phase3` until a rebuild rolls it forward). Run via `./scripts/with-nix-libs engine/.venv/bin/python -m wafeval report-headline ...`. A `make report-headline` target can wire this once the engine image is rebuilt to include it.
+- Headline artefact: [results/reports/headline-v2-20260429/report-headline.md](results/reports/headline-v2-20260429/report-headline.md) plus the seven PNG/SVG figures under `results/figures/headline-v2-20260429/`.
 
 ### Ladder / ordered-ablation reporter
 
@@ -243,7 +255,7 @@ nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-
 
 ## Corpus
 
-**12 vuln classes, 201 payloads** — plus a separate **benign corpus** for FPR measurement (see bottom row) — (`engine/src/wafeval/payloads/*.yaml`):
+**12 vuln classes, 297 payloads** — plus a separate **benign corpus** for FPR measurement (see bottom row) — (`engine/src/wafeval/payloads/*.yaml`):
 
 | Class | # | Notes |
 |---|---:|---|
@@ -251,14 +263,14 @@ nix-shell -p stdenv.cc.cc.lib zlib --run "LD_LIBRARY_PATH=\$(nix-build --no-out-
 | xss | 35 | Script tag + handlers + Unicode + entity-split + mXSS + SVG animate + data-URI |
 | cmdi | 15 | Pipe, semicolon, backtick, $(), $IFS, brace expansion (DVWA anchor) |
 | lfi | 15 | Path traversal + PHP wrappers + null byte + encoded |
-| ssti | 10 | Jinja2, Twig, Freemarker — **no DVWA sink**, WAF-view only |
-| xxe | 10 | External entities + parameter entities — **no DVWA sink**, WAF-view only |
-| **nosql** | **15** | MongoDB `$ne`/`$regex`/`$where` + form-encoded operators |
-| **ldap** | **12** | Wildcard + OR/AND injection + AD-specific (sAMAccountName) |
-| **ssrf** | **15** | AWS/GCP/Azure metadata + decimal/hex IP + file://, gopher://, dict:// |
-| **jndi** | **12** | Log4Shell base + lower/upper/env/date lookups + dotless-i bypass |
-| **graphql** | **10** | Introspection + batch + alias + fragment cycle |
-| **crlf** | **10** | Response splitting + Set-Cookie smuggle + LF-only |
+| **ssti** | **25** | Jinja2, Twig, Freemarker, Velocity, ERB, Pug, Smarty, Mako, Handlebars, Tornado, JSP-EL, Spring SpEL — now exercised on DVWA + Juice Shop via reflective sinks |
+| **xxe** | **25** | External entities + parameter entities + OOB exfil + XInclude + SOAP + SVG + OOXML + UTF-7/16 + CDATA — now exercised on DVWA + Juice Shop |
+| **nosql** | **25** | MongoDB `$ne`/`$regex`/`$where` + form-encoded operators + `$function` (4.4+) + mapReduce + `$lookup` |
+| **ldap** | **25** | Wildcard + OR/AND injection + AD-specific (sAMAccountName, OID matching rules) + extensibleMatch |
+| **ssrf** | **25** | AWS/GCP/Azure/DO/Alibaba metadata + decimal/hex/octal/mixed IP + IPv6 mapped + file://, gopher://, dict://, ldap:// + URL userinfo trick |
+| **jndi** | **25** | Log4Shell base + LDAPS/RMI/CORBA/IIOP + lower/upper/env/sys/date/marker lookups + base64 + URI-encoded + JNDI-Exploit-Kit gadgets |
+| **graphql** | **25** | Introspection + typed/deep/directives + batch DoS + alias overload + fragment cycle + circular fragments + variable injection + nested SQLi/cmdi/JNDI/XXE smuggling |
+| **crlf** | **25** | Response splitting + Set-Cookie smuggle + LF/CR-only + Content-Type confusion + CSP/CORS clobber + cache poisoning + chunked-trailer + UTF-8/HTML-entity encoding |
 | **benign** | **15** | Realistic product searches + usernames + natural-English "near-signal" (apostrophes, nested quotes, SQL-keyword phrases). Paired with the `noop` mutator for clean FPR measurement; excluded from default runs (load via `--classes benign`). |
 
 Also shipped as a single-file **paper-replication subset** — 20 SQLi + 20 XSS in `payloads/paper_subset.yaml`, drawn from the same academic literature (PayloadsAllTheThings, OWASP WSTG, SecLists) that Yusifova (2024) cited. Not paper-verbatim (the thesis' exact payload list isn't bundled here) but sized + split to match. Load with `wafeval run --corpus paper_subset`; `tests/phase_paper.sh` is the dedicated acceptance script. The subset is a fixed point — drifting `sqli.yaml` / `xss.yaml` won't change these 40 entries, so reproduction numbers stay comparable over time.
@@ -306,6 +318,57 @@ Triggers default to `any_of` so one entry fires on DVWA ("First name") or Juice 
 - Reproduce via `make run-adaptive SEED_RUN=<research-run>`; multi-gen evolution via `make run-adaptive SEED_RUN=<…> ITER=3`. See [tests/adaptive_evolution.sh](tests/adaptive_evolution.sh).
 
 **Earlier pair-only smoke** `adaptive-smoke-20260423T123145Z` (modsec+DVWA, SQLi-only): ModSec + CRS 4.25 on DVWA SQLi — ~40% true-bypass rate (134/335) stacking two base mutators. Superseded by the 4-WAF headline above but preserved for traceability.
+
+### Latest run set — `headline-v2-20260429` (expanded corpus)
+
+Three runs against the 297-payload corpus, all 7 WAF variants × 3 targets:
+
+| Run | Run-id | Datapoints | Verdict mix |
+|---|---|---:|---|
+| Attack | `attack-v2-20260429T030310Z` | 123 676 | 28 701 allowed / 56 334 blocked / 973 silent / 37 611 baseline_fail / 57 error |
+| Adaptive | `adaptive-v2-20260429T032000Z` | 15 904 | 2 719 allowed / 5 715 blocked |
+| Benign | `benign-v2-20260429T032003Z` | 315 | 244 allowed / 34 blocked / 37 baseline_fail |
+
+Pooled bypass on Juice Shop (waf_view lens, all WAFs) — every class now has signal:
+
+| Class | rate | n | Class | rate | n |
+|---|---:|---:|---|---:|---:|
+| crlf | **64.3 %** | 3 459 | nosql | 43.9 % | 3 476 |
+| ssrf | 51.2 % | 3 687 | jndi | 32.3 % | 3 796 |
+| graphql | 50.1 % | 3 400 | xxe | **21.8 %** | 3 870 |
+| ldap | 47.2 % | 3 715 | sqli | 8.99 % | 4 385 |
+| ssti | **45.3 %** | 2 575 | | | |
+
+Per-WAF (Juice Shop) — `coraza-ph` clears every class but at 81 % FPR; the rest cluster 38–41 % with `shadowd` at 76 %:
+
+| WAF | bypass | FPR (benign, all targets) |
+|---|---:|---:|
+| `modsec` | 37.6 % | 0 % |
+| `coraza` (PL1) | 40.5 % | 0 % |
+| `shadowd` | **76.0 %** | 0 % |
+| `openappsec` | 40.9 % | 0 % |
+| `modsec-ph` (PL4) | **37.6 % — identical to `modsec`** (env-var gotcha re-confirmed) | 0 % |
+| `coraza-ph` (PL4) | **6.6 %** | **81 %** (operationally unusable) |
+
+The headline report rendered from these three runs lives at [results/reports/headline-v2-20260429/report-headline.md](results/reports/headline-v2-20260429/report-headline.md). The 11-section consolidated reporter and the underlying single-run paranoia pivot were both shipped this session — see "Reporter" below.
+
+### Academic paper (this work)
+
+A complete research paper authored by Jamila Yusifova was rendered to **Markdown + PDF** from the headline-v2 data:
+
+- [RESEARCH/paper-yusifova-2026/paper.md](RESEARCH/paper-yusifova-2026/paper.md) — 943 lines, 47 KB source
+- [RESEARCH/paper-yusifova-2026/paper.pdf](RESEARCH/paper-yusifova-2026/paper.pdf) — 25-page PDF with TOC, embedded figures, BibTeX bibliography, IEEE-style structure
+- [RESEARCH/paper-yusifova-2026/figures/architecture.mmd](RESEARCH/paper-yusifova-2026/figures/architecture.mmd) — Mermaid source for the system architecture diagram
+
+PDF build pipeline: `mmdc figures/architecture.mmd → architecture.png` then `docker run pandoc/extra paper.md --bibliography references.bib --citeproc --toc --pdf-engine=xelatex -o paper.pdf`. The paper covers introduction, related work, terminology, architecture (with the rendered diagram), methodology, experimental setup, results (with all seven analyser figures), discussion (best/worst WAF per class, mutator rankings, the `PARANOIA` env-var gotcha, operational recommendations), limitations, and conclusion.
+
+### AZTU 2026 conference deliverables
+
+Built from the same data as the paper, scoped for a 5-minute talk:
+
+- [RESEARCH/paper-yusifova-2026/presentation.pptx](RESEARCH/paper-yusifova-2026/presentation.pptx) / [presentation.pdf](RESEARCH/paper-yusifova-2026/presentation.pdf) — 19 slides (9 main + 1 *Thank you* + appendix divider + 9 back-up slides) in a warm cream / burgundy / gold palette, all visuals (architecture diagram, headline heatmap, mutator examples, compositional bar chart) rendered in-theme via `pptxgenjs` shapes — no matplotlib screenshots in the main deck.
+- [RESEARCH/paper-yusifova-2026/speech.md](RESEARCH/paper-yusifova-2026/speech.md) — verbatim 5-minute speaker script with stage directions, per-slide word counts, a pace-check table that lands at 5:00 with deliberate pauses, and an appendix flip-to map for Q&A.
+- [RESEARCH/build/](RESEARCH/build/) — `node build.js` regenerates the `.pptx`; `soffice --headless --convert-to pdf` exports the PDF. Both artefacts are reproducible byte-for-byte from the source. See [RESEARCH/build/README.md](RESEARCH/build/README.md) for the full reproduce/edit loop.
 
 ---
 

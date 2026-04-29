@@ -25,6 +25,115 @@ make down            # stop everything (keeps volumes)
 make clean           # nuke containers, volumes, and results/
 ```
 
+### Three-run consolidated headline workflow (post-Phase-7+)
+
+The richest report the lab can render fuses three runs — an attack
+run, an adaptive-mutator run seeded on the attack run, and a benign
+run for FPR — into a single Markdown report with seven figures. The
+attack run takes ~20 minutes wall-clock at `MAX_CONCURRENCY=4`;
+adaptive and benign each take under 2 minutes.
+
+```bash
+# 1) Attack run — 7 WAFs × 3 targets × 12 classes × 5 base mutators (~20min)
+ATTACK="attack-$(date -u +%Y%m%dT%H%M%SZ)"
+docker compose --profile engine run --rm --name waflab-engine-attack \
+  -e MAX_CONCURRENCY=4 \
+  engine run \
+  --classes sqli,xss,cmdi,lfi,ssti,xxe,nosql,ldap,ssrf,jndi,graphql,crlf \
+  --mutators lexical,encoding,structural,context_displacement,multi_request \
+  --max-concurrency 4 \
+  --run-id "$ATTACK"
+
+# 2) Adaptive run — rank-6 + rank-7 compositional, seeded on the attack run (~2min)
+ADAPT="adaptive-$(date -u +%Y%m%dT%H%M%SZ)"
+docker compose --profile engine run --rm --name waflab-engine-adapt \
+  -e ADAPTIVE_SEED_RUN=$ATTACK -e MAX_CONCURRENCY=4 \
+  engine run \
+  --corpus paper_subset --classes sqli,xss \
+  --mutators adaptive,adaptive3 --max-concurrency 4 \
+  --run-id "$ADAPT"
+
+# 3) Benign FPR run — classes=benign, mutators=noop (~1min)
+BEN="benign-$(date -u +%Y%m%dT%H%M%SZ)"
+docker compose --profile engine run --rm --name waflab-engine-benign \
+  -e MAX_CONCURRENCY=4 \
+  engine run --classes benign --mutators noop --max-concurrency 4 \
+  --run-id "$BEN"
+
+# 4) Render the consolidated headline report (host venv — needs the new
+#    consolidated.py reporter that isn't in the engine image yet)
+./scripts/with-nix-libs engine/.venv/bin/python -m wafeval report-headline \
+  --attack-run-id "$ATTACK" \
+  --adaptive-run-id "$ADAPT" \
+  --benign-run-id "$BEN" \
+  --anchor-target juiceshop \
+  --out-id headline-$(date -u +%Y%m%d)
+```
+
+Output: `results/reports/headline-YYYYMMDD/report-headline.md` plus
+seven figures under `results/figures/headline-YYYYMMDD/`. See
+[results/reports/headline-v2-20260429/](../results/reports/headline-v2-20260429/) for the
+shipping example.
+
+### Building the academic paper PDF
+
+The lab ships an end-to-end academic paper authored by Jamila Yusifova,
+relocated to `RESEARCH/paper-yusifova-2026/` (was `results/reports/`).
+PDF generation pipeline:
+
+```bash
+# 1) Render the architecture diagram from Mermaid source
+cd RESEARCH/paper-yusifova-2026/figures
+mmdc -i architecture.mmd -o architecture.png -w 2400 -H 1500 --backgroundColor white
+
+# 2) Compile paper.md → paper.pdf via pandoc + xelatex
+cd ..
+docker run --rm -u 1000:100 -v "$(pwd):/data" -w /data pandoc/extra:latest paper.md \
+  --bibliography=references.bib --citeproc \
+  --toc --toc-depth=3 --number-sections \
+  --pdf-engine=xelatex \
+  -V geometry:margin=1in -V documentclass:report \
+  -V linkcolor:blue -V urlcolor:blue \
+  -o paper.pdf
+```
+
+The `pandoc/extra` image bundles xelatex with enough font coverage for
+the corpus's special characters; the default `pdflatex` engine cannot
+handle the curly quotes and em-dashes in the prose. Avoid `≤` / `≥`
+in the source (use ASCII `<=` / `>=`) — even xelatex falls back to
+the body Latin Modern font for those, which doesn't ship the glyphs.
+
+### Building the AZTU conference deck
+
+The 5-minute conference deliverables (slides + speech) live alongside the
+paper. Reproduce both from the inline source in `RESEARCH/build/build.js`:
+
+```bash
+cd RESEARCH/build
+npm install                      # one-time — installs pptxgenjs
+node build.js                    # writes ../paper-yusifova-2026/presentation.pptx
+soffice --headless --convert-to pdf \
+  ../paper-yusifova-2026/presentation.pptx \
+  --outdir ../paper-yusifova-2026/   # exports presentation.pdf
+
+# Per-slide visual QA
+pdftoppm -jpeg -r 100 \
+  ../paper-yusifova-2026/presentation.pdf /tmp/slide
+```
+
+The deck is 19 slides — 8 content + 1 *Thank you* + appendix divider + 9
+back-up slides for Q&A. Palette and typography are tokenised at the top of
+`build.js`; every visual (architecture diagram, headline heatmap, mutator
+example panel, compositional bar chart, recommendation quadrant grid) is
+drawn from `pptxgenjs` primitives so the deck reproduces byte-for-byte
+without external screenshots. Speaker script is at
+[../RESEARCH/paper-yusifova-2026/speech.md](../RESEARCH/paper-yusifova-2026/speech.md)
+with timing, stage directions, and Q&A flip-to map.
+
+Requires Node 18+ and LibreOffice (`soffice`) for the PDF export. Poppler
+(`pdftoppm`) is optional for the JPG QA loop. On NixOS:
+`nix-shell -p nodejs libreoffice poppler_utils`.
+
 ### Frontend dev loop
 
 ```bash

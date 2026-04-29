@@ -28,23 +28,25 @@ engine/
 │   ├── analyzer/              # pandas, Wilson CIs, charts, CSVs, ordered ablations, latency
 │   │   ├── aggregate.py       # raw JSON → flat DataFrame
 │   │   ├── bypass.py          # true_bypass + waf_view + Wilson CI
-│   │   ├── charts.py          # heatmap, grouped bars, small multiples
+│   │   ├── charts.py          # heatmap, grouped bars, small multiples — generalised over WAFs/lens (post-Phase-7+)
 │   │   ├── export.py          # bypass_rates.csv / per_payload.csv / per_variant.csv
 │   │   ├── combined.py        # merge N runs — last-in-list wins on WAF overlap
 │   │   ├── ladder.py          # ordered ablation (paranoia, min-confidence) + FPR overlay
-│   │   └── latency.py         # p50/p95/p99 per (waf, target) — feeds reporter Appendix B
+│   │   ├── latency.py         # p50/p95/p99 per (waf, target) — feeds reporter Appendix B
+│   │   └── paranoia.py        # single-run PL1↔PL4 pivot — used by the consolidated reporter
 │   ├── reporter/              # Markdown + LaTeX (IEEEtran) + combined + Hall of Fame
 │   │   ├── markdown.py        # report.md — Table 1 + figures + Hall of Fame + Appendices A/B
 │   │   ├── latex.py           # report.tex — IEEE conference class
 │   │   ├── combined.py        # report-combined.{md,tex} for N-run merges
-│   │   ├── hall_of_fame.py    # top-N variants by (waf × target) bypass cells
+│   │   ├── consolidated.py    # report-headline.md — fuses attack + adaptive + benign into one rich 11-section report (post-Phase-7+)
+│   │   ├── hall_of_fame.py    # top-N variants by (waf × target) bypass cells; `dedup_by_payload=True` collapses near-duplicates
 │   │   └── _data.py           # paper Table 1 reference + bibliography + mutator docstrings
 │   ├── api/                   # FastAPI read-only backend
 │   │   ├── app.py             # build_app() — routes
-│   │   ├── store.py           # mtime-cached DataFrame access
+│   │   ├── store.py           # mtime-cached DataFrame access; `/runs/{id}/live` uses an incremental per-run cache (post-Phase-7+) so polling a 70k-file run doesn't re-parse everything every tick
 │   │   └── __main__.py        # `python -m wafeval.api` / `wafeval-api`
-│   └── cli.py                 # `wafeval run | report | report-combined | ladder`
-└── tests/                     # 144 tests across mutators, loader, verdict, session, analyzer, latency, reporter, api, combined, ladder, benign-fpr, header-safe, waf-header-capture
+│   └── cli.py                 # `wafeval run | report | report-combined | report-headline | ladder`
+└── tests/                     # 144+ tests across mutators, loader, verdict, session, analyzer, paranoia, latency, reporter, api, combined, consolidated, ladder, benign-fpr, header-safe, waf-header-capture, hof-dedup
 ```
 
 ## Quickstart (from the repo root)
@@ -84,3 +86,37 @@ renders these as a key/value table when present.
 See `docs/ADDING_MUTATORS.md`. Short version: drop a new file under
 `src/wafeval/mutators/`, subclass `Mutator`, decorate with `@register`,
 return ≥5 variants per input, add a test.
+
+## Consolidated headline reporter (post-Phase-7+)
+
+The richest report the lab can render fuses three runs into a single
+11-section Markdown bundle:
+
+```bash
+./scripts/with-nix-libs engine/.venv/bin/python -m wafeval report-headline \
+  --attack-run-id <attack> \
+  --adaptive-run-id <adaptive> \
+  --benign-run-id <benign> \
+  --anchor-target juiceshop \
+  --out-id headline-<date>
+```
+
+Output: `results/reports/<out-id>/report-headline.md` plus seven
+PNG/SVG figures under `results/figures/<out-id>/`. Adaptive and benign
+run-ids are optional — the report degrades gracefully when either is
+absent.
+
+The reporter expects the input runs to be **disjoint in (waf, mutator)
+space** (the attack run owns the base mutators, the adaptive run owns
+rank-6/7, the benign run owns `noop`). It does not dedup by WAF the
+way `report-combined` does — concatenation is safe by construction.
+
+Currently host-venv-only — the `consolidated.py` reporter lives on the
+local code path, not yet rolled into `waflab/engine:phase3`. Run via
+`./scripts/with-nix-libs engine/.venv/bin/python -m wafeval ...` until
+the next image rebuild.
+
+See [docs/DEV.md](../docs/DEV.md) for the full three-run workflow including
+the engine commands that produce the inputs, and the
+[paper-build pipeline](../docs/DEV.md#building-the-academic-paper-pdf)
+for converting `paper.md` to PDF via pandoc/xelatex.

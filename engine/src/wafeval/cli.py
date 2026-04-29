@@ -25,6 +25,7 @@ from wafeval.analyzer.ladder import (
 from wafeval.reporter import (
     render_combined_latex,
     render_combined_markdown,
+    render_consolidated,
     render_latex,
     render_markdown,
 )
@@ -115,6 +116,27 @@ def _build_parser() -> argparse.ArgumentParser:
              "e.g. --fpr-steps pl1:bench-run-a,pl2:bench-run-b. Produces a second "
              "FPR table + dashed overlay lines on the chart.",
     )
+
+    rh = sub.add_parser(
+        "report-headline",
+        help="Consolidated headline report — combines an attack run with optional "
+             "adaptive (rank 6/7) and benign (FPR) runs into a single rich Markdown "
+             "+ figures bundle anchored on the differentiating target.",
+    )
+    rh.add_argument("--attack-run-id", required=True,
+                    help="canonical attack run (12 classes × 5 base mutators × all WAFs)")
+    rh.add_argument("--adaptive-run-id", default=None,
+                    help="run with mutators=adaptive,adaptive3 seeded on the attack run")
+    rh.add_argument("--benign-run-id", default=None,
+                    help="run with --classes benign --mutators noop, used for FPR overlay")
+    rh.add_argument("--anchor-target", default="juiceshop",
+                    help="target to anchor headline numbers on (default: juiceshop — "
+                         "DVWA collapses to 0%% so it hides the differentiation)")
+    rh.add_argument("--results-root", type=Path, default=Path(os.environ.get("RESULTS_ROOT", "results/raw")))
+    rh.add_argument("--reports-dir", type=Path, default=Path("results/reports"))
+    rh.add_argument("--figures-dir", type=Path, default=Path("results/figures"))
+    rh.add_argument("--out-id", default="headline",
+                    help="directory name under reports/ and figures/ for the bundle")
     return p
 
 
@@ -304,6 +326,31 @@ def main(argv: list[str] | None = None) -> int:
         for p in figures:
             print(f"  figure:         {p}")
         print(f"  report-ladder.md: {md}")
+        return 0
+
+    if args.cmd == "report-headline":
+        report_dir = args.reports_dir / args.out_id
+        figures_dir = args.figures_dir / args.out_id
+        try:
+            md_path = render_consolidated(
+                raw_root=args.results_root,
+                attack_run_id=args.attack_run_id,
+                adaptive_run_id=args.adaptive_run_id,
+                benign_run_id=args.benign_run_id,
+                out_dir=report_dir,
+                figures_dir=figures_dir,
+                anchor_target=args.anchor_target,
+            )
+        except FileNotFoundError as e:
+            print(f"[report-headline] {e}", file=sys.stderr)
+            return 1
+        print(f"out_id={args.out_id}")
+        print(f"  attack:    {args.attack_run_id}")
+        print(f"  adaptive:  {args.adaptive_run_id or '(skipped)'}")
+        print(f"  benign:    {args.benign_run_id or '(skipped)'}")
+        print(f"  anchor:    {args.anchor_target}")
+        print(f"  report:    {md_path}")
+        print(f"  figures:   {figures_dir}")
         return 0
 
     return 2

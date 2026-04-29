@@ -23,6 +23,12 @@ from wafeval.reporter.hall_of_fame import hall_of_fame
 # Cache: run_id → (newest_mtime_seen, DataFrame). Invalidated on new writes.
 _df_cache: dict[str, tuple[float, int, pd.DataFrame]] = {}
 
+# Incremental cache for the /live endpoint: run_id → {"seen", "rows", "histogram"}.
+# Each poll reads only files that have appeared since the last call. Without this,
+# a polling dashboard against a 70k-file run re-parses every JSON on every tick
+# and the FastAPI handler exceeds nginx's 30s timeout (504 Gateway Time-out).
+_live_cache: dict[str, dict[str, Any]] = {}
+
 
 def _run_dir(raw_root: Path, run_id: str) -> Path:
     d = raw_root / run_id
@@ -99,31 +105,45 @@ def run_manifest(raw_root: Path, run_id: str) -> dict[str, Any]:
 
 
 def run_live(raw_root: Path, run_id: str, tail: int) -> dict[str, Any]:
-    """Freshly scan the run dir — intended for a polling progress panel."""
+    """Freshly scan the run dir — intended for a polling progress panel.
+
+    Incremental: parses only JSON files that haven't been seen on a previous
+    poll for this ``run_id``. The histogram and the "rows" tail are accumulated
+    in ``_live_cache`` so each call is O(new files) rather than O(all files).
+    """
     run_dir = _run_dir(raw_root, run_id)
     manifest = _manifest_dict(run_dir)
     expected = int(manifest.get("totals", {}).get("datapoints", 0)) or None
 
-    files = sorted(
-        (p for p in run_dir.rglob("*.json") if p.name != "manifest.json"),
-        key=lambda p: p.stat().st_mtime,
-    )
-    histogram: dict[str, int] = {}
-    recent: list[dict[str, Any]] = []
-    for p in files:
+    cache = _live_cache.setdefault(run_id, {"seen": set(), "rows": [], "histogram": {}})
+    seen: set[str] = cache["seen"]
+    rows: list[dict[str, Any]] = cache["rows"]
+    histogram: dict[str, int] = cache["histogram"]
+
+    new_files: list[tuple[float, Path]] = []
+    for p in run_dir.rglob("*.json"):
+        if p.name == "manifest.json":
+            continue
+        sp = str(p)
+        if sp in seen:
+            continue
+        try:
+            mtime = p.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        new_files.append((mtime, p))
+
+    # Sort newcomers by mtime so the rolling "recent" tail stays time-ordered.
+    new_files.sort(key=lambda x: x[0])
+    for _mtime, p in new_files:
         try:
             d = json.loads(p.read_text())
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, FileNotFoundError):
             continue
+        seen.add(str(p))
         v = d.get("verdict", "unknown")
         histogram[v] = histogram.get(v, 0) + 1
-
-    for p in files[-tail:][::-1]:
-        try:
-            d = json.loads(p.read_text())
-        except json.JSONDecodeError:
-            continue
-        recent.append({
+        rows.append({
             "payload_id": d.get("payload_id"),
             "variant":    d.get("variant"),
             "mutator":    d.get("mutator"),
@@ -133,11 +153,13 @@ def run_live(raw_root: Path, run_id: str, tail: int) -> dict[str, Any]:
             "verdict":    d.get("verdict"),
             "timestamp":  d.get("timestamp"),
         })
+
+    recent = rows[-tail:][::-1]
     return {
         "run_id": run_id,
-        "processed": len(files),
+        "processed": len(rows),
         "expected": expected,
-        "histogram": histogram,
+        "histogram": dict(histogram),
         "recent": recent,
         "manifest": manifest,
     }

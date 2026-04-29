@@ -13,7 +13,8 @@ from pathlib import Path
 import pandas as pd
 
 
-def hall_of_fame(df: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
+def hall_of_fame(df: pd.DataFrame, top_n: int = 20,
+                  dedup_by_payload: bool = False) -> pd.DataFrame:
     """Return the top ``top_n`` (payload × variant) rows sorted by bypass count.
 
     A row in the returned frame represents one mutator variant of one
@@ -24,6 +25,14 @@ def hall_of_fame(df: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
         baseline-confirmed verdict (so the denominator is comparable).
       - ``waf_targets`` — a short human-readable list of which (waf,target)
         cells let the variant through.
+
+    ``dedup_by_payload=True`` keeps only the *best* variant per source
+    payload (highest bypass count, ties broken by bypass rate). Useful for
+    the headline gallery where eleven variants of ``admin'-- -`` taking
+    rows 2-12 isn't more informative than one entry showing ``admin'-- -``
+    with its winning mutator. The full per-variant ranking stays
+    available via ``dedup_by_payload=False`` (the default, kept for the
+    per-run reporter).
     """
     if df.empty:
         return pd.DataFrame(columns=["payload_id", "variant", "mutator",
@@ -72,11 +81,15 @@ def hall_of_fame(df: pd.DataFrame, top_n: int = 20) -> pd.DataFrame:
 
     grouped["bypass_rate"] = grouped["bypasses"] / grouped["cells"].clip(lower=1)
 
-    return (
-        grouped.sort_values(["bypasses", "bypass_rate"], ascending=[False, False])
-        .head(top_n)
-        .reset_index(drop=True)
-    )
+    ranked = grouped.sort_values(["bypasses", "bypass_rate"], ascending=[False, False])
+
+    if dedup_by_payload:
+        # Keep the row with the highest (bypasses, bypass_rate) per payload_id.
+        # The sort above already orders by that key, so ``drop_duplicates`` on
+        # ``payload_id`` keeps the leader of each group.
+        ranked = ranked.drop_duplicates("payload_id", keep="first")
+
+    return ranked.head(top_n).reset_index(drop=True)
 
 
 def render_markdown(rows: pd.DataFrame) -> str:

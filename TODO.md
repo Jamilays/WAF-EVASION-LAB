@@ -8,69 +8,70 @@ history).
 
 ---
 
+## Resolved this session (2026-04-29) — kept here for one cycle, then delete
+
+The 2026-04-29 work landed four significant items at once:
+
+- **AZTU 2026 conference deliverables** — the paper folder moved from
+  `results/reports/paper-yusifova-2026/` to
+  [`RESEARCH/paper-yusifova-2026/`](RESEARCH/paper-yusifova-2026/) and
+  picked up a 19-slide [presentation.pptx](RESEARCH/paper-yusifova-2026/presentation.pptx)
+  + matching PDF export, plus a 5-minute speaker script
+  ([speech.md](RESEARCH/paper-yusifova-2026/speech.md)). Both artefacts
+  reproduce from inline source in [RESEARCH/build/build.js](RESEARCH/build/build.js)
+  via a `pptxgenjs` toolchain (`node build.js` + `soffice --convert-to pdf`).
+  Every visual on the main deck — architecture diagram, headline heatmap,
+  mutator example panel, compositional bar chart, recommendation
+  quadrants — is drawn shape-by-shape in a custom cream / burgundy / gold
+  palette, no matplotlib screenshots. The 9 appendix slides keep the
+  matplotlib figures as Q&A back-up.
+
+
+- **P0.1 (FPR as first-class column)** — the new consolidated headline
+  reporter (`wafeval report-headline`, `engine/src/wafeval/reporter/consolidated.py`)
+  emits a per-WAF *Attack vs FPR* table fusing the attack run with a
+  paired benign run (`--benign-run-id`). The right-most column is
+  `block-attack ÷ block-benign`, which is the operationally usable
+  trade-off proxy. Open follow-up: the canonical ROC scatter (FPR×bypass
+  per (WAF × paranoia)) is *not* yet in the consolidated report, only
+  the table; and the benign corpus is still 15 entries — expand to ~100
+  for tighter Wilson CIs on FPR.
+- **P0.2 (fresh 4-WAF combined run)** — superseded by the consolidated
+  headline run set (`headline-v2-20260429`) which fuses
+  `attack-v2-20260429T030310Z` + `adaptive-v2-20260429T032000Z` +
+  `benign-v2-20260429T032003Z` and produces a richer 11-section report
+  than the older `report-combined`. The Coraza rule-ID headers are
+  captured on every blocked record automatically (no reporter work
+  needed; they live on `VerdictRecord.waf_route.waf_headers`).
+- **P1.3 (modern bypass techniques)** — partially addressed via the
+  corpus expansion. Eight thin classes (CRLF, SSRF, LDAP, NoSQL, JNDI,
+  GraphQL, SSTI, XXE) went from 10–15 entries each to 25 entries each;
+  total corpus 201 → 297. The new payloads cover modern dialects:
+  cloud-metadata bypasses (decimal/hex/octal/IPv6 IP; AWS/GCP/Azure/DO/Alibaba),
+  Log4Shell obfuscations (env / sys / date / marker lookups, base64 +
+  URL-encoded variants, JNDI-Exploit-Kit gadgets), GraphQL alias-overload /
+  fragment-cycle / nested-injection chains, MongoDB 4.4+ `$function` and
+  mapReduce, AD-specific LDAP (extensibleMatch, OID matching rules),
+  CSP/CORS/cache-poisoning CRLF chains, Pug / Mako / Handlebars / Spring
+  SpEL SSTI gadgets, OOB / SVG / OOXML / UTF-7/16 XXE. Still open:
+  HTTP/2 request smuggling, path-normalisation differentials,
+  Content-Type confusion, chunked-encoding edges, prototype pollution
+  on Juice Shop (Node). These warrant their own dedicated `smuggling.yaml`
+  and a transport-layer rework (Traefik h2c entrypoint).
+
+---
+
 ## P0 — highest impact, small-to-medium scope
 
-### 1. False-positive rate as a first-class column in Table 1
-
-`benign.yaml` + `noop` mutator + `ladder --fpr-steps` are shipped but
-the benign-FPR signal isn't integrated into the headline bypass table.
-The publishable story is the (bypass rate, FPR) trade-off as a 2D
-curve. Concrete:
-
-- Extend the markdown reporter's Table 1 to emit two columns per WAF:
-  `bypass_rate | fpr`. Data path: load a paired benign-run per WAF from
-  `manifest.json` (new `benign_run_id` field written by the engine when
-  `--benign-run-id` is passed) OR from a CLI flag.
-- Add a scatter plot (one point per WAF × paranoia-level) with FPR on
-  x, bypass rate on y — the canonical ROC-style chart.
-- Expand benign corpus from 15 → ~100 entries: scrape realistic
-  product-search queries from Juice Shop's catalogue, add common usernames,
-  dates, addresses, natural English phrases that share SQL/LDAP/XSS
-  vocabulary by coincidence.
-
-### 2. Fresh 4-WAF combined run with rule-IDs
-
-`results/reports/combined-phase7/` is the current headline 4-WAF
-comparison — it's from 2026-04-21, predates the Coraza rule-ID
-stamping shipped this week, and is missing WebGoat data on several
-cells. Regenerate:
-
-```
-make run                                # 3 WAFs × 3 targets, full corpus
-docker compose --profile engine run ... # paranoia-high (modsec-ph, coraza-ph)
-docker compose --profile engine run ... # openappsec
-make report-combined RUN_IDS=...        # stitch into combined-<date>/
-```
-
-Verify: the combined report's cell tooltips now include
-`x-coraza-rules-matched` when viewed in the dashboard (already wired
-via waf_headers). Add the combined report dir to the README's State of
-the World section.
+*(items 1 + 2 resolved above this cycle)*
 
 ---
 
 ## P1 — high impact, medium scope
 
-### 3. Modern bypass techniques the corpus is missing
-
-The current corpus is dominated by CRS 3.x-era vectors that libinjection
-catches trivially. Add a new `payloads/smuggling.yaml` (and as-needed
-mutator extensions):
-
-- HTTP/2 request smuggling (`Content-Length` / `Transfer-Encoding`
-  desync, HPACK compression tricks). Note: our current lab is HTTP/1.1
-  only — this probably requires switching Traefik to h2c or adding an
-  h2 entrypoint.
-- Path-normalisation differentials (`/%2e%2e/`, `//`, `;`-parameter,
-  unicode homoglyphs, Windows-style `\`).
-- Content-Type confusion: send JSON body with `Content-Type: text/plain`
-  so CRS doesn't parse it as JSON but backend does.
-- Chunked-encoding edge cases: zero-length chunks, trailing headers
-  carrying payloads.
-- Host/Origin/Referer header smuggling (SSRF/XSS/CRLF in non-`query`
-  headers).
-- Prototype pollution on Juice Shop (Node-specific class absent from
-  the corpus).
+*(item 3 partially resolved above this cycle — the corpus expansion
+covered the dialect breadth; transport-layer items remain open as
+their own future ticket.)*
 
 ### 4. Statistical rigor for write-up
 
