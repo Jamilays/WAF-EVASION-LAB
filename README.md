@@ -4,8 +4,6 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 
 > ⚠ **Authorized use only.** This lab contains intentionally vulnerable apps and an offensive payload engine. Do not point it at systems you do not own or have explicit written authorization to test. All services are bound to `127.0.0.1`.
 
-> 🤖 **This README doubles as memory for future Claude sessions.** Read the "State of the World" section below before making changes — it records the current invariants, gotchas, and decisions that aren't derivable from the code alone.
-
 ---
 
 ## Status
@@ -27,7 +25,7 @@ Reproducible single-command lab that replicates and extends Jamila Yusifova's bl
 
 ---
 
-## State of the World (for future-Claude memory)
+## State of the World
 
 ### WAFs — all 4 legitimately enforcing
 
